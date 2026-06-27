@@ -1,0 +1,9 @@
+{
+  "name": "ticketing-system",
+  "private": true,
+  "scripts": {
+    "start": "node serve.js",
+    "api": "node backend-node/server.js",
+    "dev": "node backend-node/server.js"
+  }
+}
