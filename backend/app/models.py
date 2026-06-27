@@ -17,6 +17,13 @@ class TicketStatus(str, enum.Enum):
     FORWARDED = "forwarded"
 
 
+class TicketPriority(str, enum.Enum):
+    NORMAL = "normal"
+    MODERATE = "moderate"
+    URGENT = "urgent"
+    CRITICAL = "critical"
+
+
 class Department(Base):
     __tablename__ = "departments"
 
@@ -76,6 +83,7 @@ class Ticket(Base):
     ticket_description = Column(String(300), nullable=False)
     details = Column(Text, nullable=True)
     assigned_to = Column(Integer, ForeignKey("employees.emp_id"), nullable=False)
+    priority = Column(SAEnum(TicketPriority), default=TicketPriority.NORMAL, nullable=False)
     status = Column(SAEnum(TicketStatus), default=TicketStatus.OPEN, nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
@@ -96,6 +104,7 @@ class TicketAttachment(Base):
     ticket_id = Column(Integer, ForeignKey("tickets.id"), nullable=False)
     file_name = Column(String(255), nullable=False)
     file_path = Column(String(500), nullable=False)
+    file_type = Column(String(20), nullable=False, default="image")
     uploaded_at = Column(DateTime, default=datetime.utcnow)
     uploaded_by = Column(Integer, ForeignKey("employees.emp_id"), nullable=True)
 

@@ -91,6 +91,7 @@ class AttachmentOut(BaseModel):
     id: int
     file_name: str
     file_path: str
+    file_type: str = "image"
     uploaded_at: datetime
     model_config = ConfigDict(from_attributes=True)
 
@@ -117,6 +118,7 @@ class TicketCreate(BaseModel):
     ticket_description: str
     details: Optional[str] = None
     assigned_to: int
+    priority: str = "normal"
 
 
 class TicketUpdate(BaseModel):
@@ -124,6 +126,7 @@ class TicketUpdate(BaseModel):
     details: Optional[str] = None
     complaint_category_id: Optional[int] = None
     location_id: Optional[int] = None
+    priority: Optional[str] = None
     remarks: Optional[str] = None
 
 
@@ -147,6 +150,7 @@ class TicketOut(BaseModel):
     ticket_description: str
     details: Optional[str] = None
     assigned_to: int
+    priority: str
     status: str
     created_at: datetime
     updated_at: datetime

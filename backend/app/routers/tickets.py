@@ -12,6 +12,24 @@ from .. import models, schemas
 
 router = APIRouter(prefix="/api/tickets", tags=["Tickets"])
 
+
+def generate_ticket_no(db: Session) -> str:
+    today_str = date.today().strftime("%Y%m%d")
+    prefix = f"TKT-{today_str}-"
+    last = (
+        db.query(models.Ticket)
+        .filter(models.Ticket.ticket_no.like(f"{prefix}%"))
+        .order_by(models.Ticket.id.desc())
+        .first()
+    )
+    seq = 1
+    if last:
+        try:
+            seq = int(last.ticket_no.rsplit("-", 1)[-1]) + 1
+        except ValueError:
+            seq = 1
+    return f"{prefix}{seq:03d}"
+
 UPLOAD_DIR = Path(os.getenv("UPLOAD_DIR", "uploads"))
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -26,6 +44,25 @@ def save_upload(file: UploadFile) -> tuple[str, str]:
     return file.filename, f"uploads/{unique_name}"
 
 
+def add_attachments(
+    ticket_id: int,
+    upload_files: List[UploadFile],
+    file_type: str,
+    uploaded_by: int,
+    db: Session,
+) -> None:
+    for upload_file in upload_files:
+        if upload_file.filename:
+            orig_name, path = save_upload(upload_file)
+            db.add(models.TicketAttachment(
+                ticket_id=ticket_id,
+                file_name=orig_name,
+                file_path=path,
+                file_type=file_type,
+                uploaded_by=uploaded_by,
+            ))
+
+
 def build_ticket_detail(ticket: models.Ticket) -> schemas.TicketDetail:
     return schemas.TicketDetail(
         id=ticket.id,
@@ -38,6 +75,7 @@ def build_ticket_detail(ticket: models.Ticket) -> schemas.TicketDetail:
         ticket_description=ticket.ticket_description,
         details=ticket.details,
         assigned_to=ticket.assigned_to,
+        priority=ticket.priority.value,
         status=ticket.status.value,
         created_at=ticket.created_at,
         updated_at=ticket.updated_at,
@@ -57,6 +95,11 @@ def list_tickets(db: Session = Depends(get_db)):
     return [build_ticket_detail(t) for t in tickets]
 
 
+@router.get("/next-number")
+def get_next_ticket_number(db: Session = Depends(get_db)):
+    return {"ticket_no": generate_ticket_no(db)}
+
+
 @router.get("/{ticket_id}", response_model=schemas.TicketDetail)
 def get_ticket(ticket_id: int, db: Session = Depends(get_db)):
     ticket = db.query(models.Ticket).filter(models.Ticket.id == ticket_id).first()
@@ -67,8 +110,8 @@ def get_ticket(ticket_id: int, db: Session = Depends(get_db)):
 
 @router.post("/", response_model=schemas.TicketDetail)
 async def create_ticket(
-    ticket_no: str = Form(...),
     ticket_date: date = Form(...),
+    ticket_no: Optional[str] = Form(None),
     raising_dept_id: int = Form(...),
     raising_employee_id: int = Form(...),
     complaint_category_id: int = Form(...),
@@ -76,12 +119,26 @@ async def create_ticket(
     ticket_description: str = Form(...),
     details: Optional[str] = Form(None),
     assigned_to: int = Form(...),
+    priority: str = Form("normal"),
     images: List[UploadFile] = File(default=[]),
+    files: List[UploadFile] = File(default=[]),
     db: Session = Depends(get_db),
 ):
-    existing = db.query(models.Ticket).filter(models.Ticket.ticket_no == ticket_no).first()
-    if existing:
-        raise HTTPException(status_code=400, detail="Ticket number already exists")
+    if not any(f.filename for f in files):
+        raise HTTPException(status_code=400, detail="At least one document file is required")
+
+    if not ticket_no or not ticket_no.strip():
+        ticket_no = generate_ticket_no(db)
+    else:
+        ticket_no = ticket_no.strip()
+        existing = db.query(models.Ticket).filter(models.Ticket.ticket_no == ticket_no).first()
+        if existing:
+            raise HTTPException(status_code=400, detail="Ticket number already exists")
+
+    try:
+        ticket_priority = models.TicketPriority(priority.lower())
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid priority value")
 
     ticket = models.Ticket(
         ticket_no=ticket_no,
@@ -93,20 +150,14 @@ async def create_ticket(
         ticket_description=ticket_description,
         details=details,
         assigned_to=assigned_to,
+        priority=ticket_priority,
         status=models.TicketStatus.OPEN,
     )
     db.add(ticket)
     db.flush()
 
-    for img in images:
-        if img.filename:
-            orig_name, path = save_upload(img)
-            db.add(models.TicketAttachment(
-                ticket_id=ticket.id,
-                file_name=orig_name,
-                file_path=path,
-                uploaded_by=raising_employee_id,
-            ))
+    add_attachments(ticket.id, images, "image", raising_employee_id, db)
+    add_attachments(ticket.id, files, "file", raising_employee_id, db)
 
     db.add(models.TicketHistory(
         ticket_id=ticket.id,
@@ -128,8 +179,10 @@ async def update_ticket(
     details: Optional[str] = Form(None),
     complaint_category_id: Optional[int] = Form(None),
     location_id: Optional[int] = Form(None),
+    priority: Optional[str] = Form(None),
     remarks: Optional[str] = Form(None),
     images: List[UploadFile] = File(default=[]),
+    files: List[UploadFile] = File(default=[]),
     db: Session = Depends(get_db),
 ):
     ticket = db.query(models.Ticket).filter(models.Ticket.id == ticket_id).first()
@@ -146,19 +199,21 @@ async def update_ticket(
         ticket.complaint_category_id = complaint_category_id
     if location_id is not None:
         ticket.location_id = location_id
+    if priority is not None:
+        try:
+            ticket.priority = models.TicketPriority(priority.lower())
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Invalid priority value")
 
     if ticket.status == models.TicketStatus.OPEN:
         ticket.status = models.TicketStatus.IN_PROGRESS
 
     for img in images:
         if img.filename:
-            orig_name, path = save_upload(img)
-            db.add(models.TicketAttachment(
-                ticket_id=ticket.id,
-                file_name=orig_name,
-                file_path=path,
-                uploaded_by=action_by,
-            ))
+            add_attachments(ticket.id, [img], "image", action_by, db)
+
+    if any(f.filename for f in files):
+        add_attachments(ticket.id, files, "file", action_by, db)
 
     db.add(models.TicketHistory(
         ticket_id=ticket.id,
@@ -196,13 +251,7 @@ async def forward_ticket(
 
     for img in images:
         if img.filename:
-            orig_name, path = save_upload(img)
-            db.add(models.TicketAttachment(
-                ticket_id=ticket.id,
-                file_name=orig_name,
-                file_path=path,
-                uploaded_by=action_by,
-            ))
+            add_attachments(ticket.id, [img], "image", action_by, db)
 
     db.add(models.TicketHistory(
         ticket_id=ticket.id,
@@ -235,13 +284,7 @@ async def close_ticket(
 
     for img in images:
         if img.filename:
-            orig_name, path = save_upload(img)
-            db.add(models.TicketAttachment(
-                ticket_id=ticket.id,
-                file_name=orig_name,
-                file_path=path,
-                uploaded_by=action_by,
-            ))
+            add_attachments(ticket.id, [img], "image", action_by, db)
 
     db.add(models.TicketHistory(
         ticket_id=ticket.id,

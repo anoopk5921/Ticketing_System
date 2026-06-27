@@ -1,30 +1,36 @@
 // --- API helpers ---
 const API = '/api';
 
+async function parseErrorResponse(res) {
+  const text = await res.text();
+  try {
+    const err = JSON.parse(text);
+    if (typeof err.detail === 'string') return err.detail;
+    if (Array.isArray(err.detail)) {
+      return err.detail.map((e) => e.msg || String(e)).join(', ');
+    }
+  } catch {
+    // not JSON
+  }
+  if (text && text.length < 300 && !text.includes('<html')) return text;
+  return `Request failed (${res.status})`;
+}
+
 async function request(url, options = {}) {
   const res = await fetch(API + url, options);
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({ detail: 'Request failed' }));
-    throw new Error(typeof err.detail === 'string' ? err.detail : 'Request failed');
-  }
+  if (!res.ok) throw new Error(await parseErrorResponse(res));
   return res.json();
 }
 
 async function postForm(url, formData) {
   const res = await fetch(API + url, { method: 'POST', body: formData });
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({ detail: 'Request failed' }));
-    throw new Error(typeof err.detail === 'string' ? err.detail : 'Request failed');
-  }
+  if (!res.ok) throw new Error(await parseErrorResponse(res));
   return res.json();
 }
 
 async function putForm(url, formData) {
   const res = await fetch(API + url, { method: 'PUT', body: formData });
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({ detail: 'Request failed' }));
-    throw new Error(typeof err.detail === 'string' ? err.detail : 'Request failed');
-  }
+  if (!res.ok) throw new Error(await parseErrorResponse(res));
   return res.json();
 }
 
@@ -66,6 +72,12 @@ function esc(s) {
 
 function badge(status) {
   return `<span class="badge badge-${status}">${status.replace('_', ' ')}</span>`;
+}
+
+function priorityBadge(priority) {
+  const value = priority || 'normal';
+  const label = value.charAt(0).toUpperCase() + value.slice(1);
+  return `<span class="badge badge-priority-${value}">${label}</span>`;
 }
 
 // --- Generic Master Page ---
@@ -313,6 +325,7 @@ async function renderTicketList() {
       <td>${esc(t.ticket_no)}</td><td>${t.ticket_date}</td><td>${esc(t.ticket_description)}</td>
       <td>${esc(t.category_name)}</td><td>${esc(t.location_name)}</td>
       <td>${esc(t.raising_employee_name)}</td><td>${esc(t.assignee_name)}</td>
+      <td>${priorityBadge(t.priority)}</td>
       <td>${badge(t.status)}</td>
       <td><a class="btn btn-sm btn-primary" href="#/tickets/${t.id}">View</a></td>
     </tr>`).join('');
@@ -323,8 +336,8 @@ async function renderTicketList() {
         <a class="btn btn-primary" href="#/tickets/new">+ New Ticket</a>
       </div>
       <div class="card"><table>
-        <thead><tr><th>Ticket No</th><th>Date</th><th>Description</th><th>Category</th><th>Location</th><th>Raised By</th><th>Assigned To</th><th>Status</th><th>Action</th></tr></thead>
-        <tbody>${rows || '<tr><td colspan="9" style="text-align:center;color:#888">No tickets</td></tr>'}</tbody>
+        <thead><tr><th>Ticket No</th><th>Date</th><th>Description</th><th>Category</th><th>Location</th><th>Raised By</th><th>Assigned To</th><th>Priority</th><th>Status</th><th>Action</th></tr></thead>
+        <tbody>${rows || '<tr><td colspan="10" style="text-align:center;color:#888">No tickets</td></tr>'}</tbody>
       </table></div>`;
   } catch (e) {
     main.innerHTML = `<h2 class="page-title">Tickets</h2><div class="error">${esc(e.message)}</div>`;
@@ -343,8 +356,14 @@ async function renderNewTicket() {
     <div class="card">
       <form id="newTicketForm" onsubmit="submitNewTicket(event)">
         <div class="form-row">
-          <div class="form-group"><label>Ticket No</label><input name="ticket_no" required /></div>
           <div class="form-group"><label>Date</label><input type="date" name="ticket_date" value="${today}" required /></div>
+          <div class="form-group"><label>Priority</label>
+            <select name="priority" required>
+              <option value="normal">Normal</option>
+              <option value="moderate">Moderate</option>
+              <option value="urgent">Urgent</option>
+              <option value="critical">Critical</option>
+            </select></div>
         </div>
         <div class="form-row">
           <div class="form-group"><label>Raising Department</label>
@@ -376,6 +395,7 @@ async function renderNewTicket() {
             </select></div>
         </div>
         <div class="form-group" style="margin-bottom:14px"><label>Details</label><textarea name="details"></textarea></div>
+        <div class="form-group" style="margin-bottom:14px"><label>Upload Document *</label><input type="file" name="files" accept=".pdf,.doc,.docx,.xls,.xlsx,.txt,.csv,.zip,.ppt,.pptx" multiple required /></div>
         <div class="form-group" style="margin-bottom:14px"><label>Upload Pictures</label><input type="file" name="images" accept="image/*" multiple /></div>
         <div id="formError" class="error"></div>
         <button type="submit" class="btn btn-primary">Create Ticket</button>
@@ -397,12 +417,18 @@ window.filterEmployees = () => {
 window.submitNewTicket = async (e) => {
   e.preventDefault();
   const fd = new FormData(e.target);
-  const files = e.target.querySelector('[name=images]').files;
+  const imageFiles = e.target.querySelector('[name=images]').files;
+  const documentFiles = e.target.querySelector('[name=files]').files;
+  if (!documentFiles.length) {
+    document.getElementById('formError').textContent = 'Please upload at least one document file';
+    return;
+  }
   const formData = new FormData();
-  ['ticket_no','ticket_date','raising_dept_id','raising_employee_id','complaint_category_id','location_id','ticket_description','details','assigned_to'].forEach(k => {
+  ['ticket_date','priority','raising_dept_id','raising_employee_id','complaint_category_id','location_id','ticket_description','details','assigned_to'].forEach(k => {
     if (fd.get(k)) formData.append(k, fd.get(k));
   });
-  for (const f of files) formData.append('images', f);
+  for (const f of imageFiles) formData.append('images', f);
+  for (const f of documentFiles) formData.append('files', f);
   try {
     await postForm('/tickets/', formData);
     navigate('#/tickets');
@@ -421,8 +447,15 @@ async function renderTicketDetail(id) {
       request(`/tickets/${id}`), request('/employees/'), request('/categories/'), request('/locations/'),
     ]);
 
-    const imgs = ticket.attachments.map(a =>
+    const imageAttachments = ticket.attachments.filter(a => a.file_type !== 'file');
+    const fileAttachments = ticket.attachments.filter(a => a.file_type === 'file');
+
+    const imgs = imageAttachments.map(a =>
       `<a href="/${a.file_path}" target="_blank"><img src="/${a.file_path}" alt="${esc(a.file_name)}" /></a>`
+    ).join('');
+
+    const docs = fileAttachments.map(a =>
+      `<a href="/${a.file_path}" target="_blank" class="btn" style="margin-right:8px;margin-bottom:8px;display:inline-block">${esc(a.file_name)}</a>`
     ).join('');
 
     const history = ticket.history.map(h =>
@@ -442,6 +475,7 @@ async function renderTicketDetail(id) {
       <div class="card">
         <div class="form-row">
           <div class="form-group"><label>Status</label><div>${badge(ticket.status)}</div></div>
+          <div class="form-group"><label>Priority</label><div>${priorityBadge(ticket.priority)}</div></div>
           <div class="form-group"><label>Date</label><div>${ticket.ticket_date}</div></div>
           <div class="form-group"><label>Category</label><div>${esc(ticket.category_name)}</div></div>
           <div class="form-group"><label>Location</label><div>${esc(ticket.location_name)}</div></div>
@@ -453,7 +487,8 @@ async function renderTicketDetail(id) {
         </div>
         <div class="form-group"><label>Description</label><div>${esc(ticket.ticket_description)}</div></div>
         <div class="form-group"><label>Details</label><div>${esc(ticket.details) || '-'}</div></div>
-        ${imgs ? `<div class="form-group"><label>Attachments</label><div class="image-preview">${imgs}</div></div>` : ''}
+        ${docs ? `<div class="form-group"><label>Documents</label><div>${docs}</div></div>` : ''}
+        ${imgs ? `<div class="form-group"><label>Pictures</label><div class="image-preview">${imgs}</div></div>` : ''}
       </div>
       ${!isClosed ? `
       <div class="card">
@@ -489,7 +524,14 @@ window.openModal = (type, ticketId) => {
           <select id="m_cat">${categories.map(c => `<option value="${c.id}" ${c.id===ticket.complaint_category_id?'selected':''}>${esc(c.category_description)}</option>`).join('')}</select></div>
         <div class="form-group"><label>Location</label>
           <select id="m_loc">${locations.map(l => `<option value="${l.id}" ${l.id===ticket.location_id?'selected':''}>${esc(l.location_name)}</option>`).join('')}</select></div>
-      </div>`;
+      </div>
+      <div class="form-group" style="margin-bottom:10px"><label>Priority</label>
+        <select id="m_priority" required>
+          <option value="normal" ${(ticket.priority||'normal')==='normal'?'selected':''}>Normal</option>
+          <option value="moderate" ${ticket.priority==='moderate'?'selected':''}>Moderate</option>
+          <option value="urgent" ${ticket.priority==='urgent'?'selected':''}>Urgent</option>
+          <option value="critical" ${ticket.priority==='critical'?'selected':''}>Critical</option>
+        </select></div>`;
   } else if (type === 'forward') {
     body = `<div class="form-group" style="margin-bottom:10px"><label>Forward To</label>
       <select id="m_forward" required><option value="">-- Select --</option>
@@ -498,8 +540,18 @@ window.openModal = (type, ticketId) => {
   }
 
   body += `
-    <div class="form-group" style="margin-bottom:10px"><label>Remarks</label><textarea id="m_remarks"></textarea></div>
-    <div class="form-group" style="margin-bottom:10px"><label>Upload Pictures</label><input type="file" id="m_images" accept="image/*" multiple /></div>
+    <div class="form-group" style="margin-bottom:10px"><label>Remarks</label><textarea id="m_remarks"></textarea></div>`;
+
+  if (type === 'update') {
+    body += `
+    <div class="form-group" style="margin-bottom:10px"><label>Upload Document</label><input type="file" id="m_files" accept=".pdf,.doc,.docx,.xls,.xlsx,.txt,.csv,.zip,.ppt,.pptx" multiple /></div>
+    <div class="form-group" style="margin-bottom:10px"><label>Upload Pictures</label><input type="file" id="m_images" accept="image/*" multiple /></div>`;
+  } else {
+    body += `
+    <div class="form-group" style="margin-bottom:10px"><label>Upload Pictures</label><input type="file" id="m_images" accept="image/*" multiple /></div>`;
+  }
+
+  body += `
     <div id="modalError" class="error"></div>`;
 
   const titles = { update: 'Update Ticket', forward: 'Forward Ticket', close: 'Close Ticket' };
@@ -526,10 +578,13 @@ window.openModal = (type, ticketId) => {
 
     try {
       if (type === 'update') {
+        const docs = document.getElementById('m_files').files;
+        for (const f of docs) fd.append('files', f);
         fd.append('ticket_description', document.getElementById('m_desc').value);
         fd.append('details', document.getElementById('m_details').value);
         fd.append('complaint_category_id', document.getElementById('m_cat').value);
         fd.append('location_id', document.getElementById('m_loc').value);
+        fd.append('priority', document.getElementById('m_priority').value);
         await putForm(`/tickets/${ticketId}`, fd);
       } else if (type === 'forward') {
         const fwd = document.getElementById('m_forward').value;

@@ -30,6 +30,10 @@ table tr:hover { background: #f8f9fa; }
 .badge-in_progress { background: #fff3e0; color: #e65100; }
 .badge-forwarded { background: #f3e5f5; color: #7b1fa2; }
 .badge-closed { background: #e8f5e9; color: #2e7d32; }
+.badge-priority-normal { background: #eceff1; color: #455a64; }
+.badge-priority-moderate { background: #e3f2fd; color: #1565c0; }
+.badge-priority-urgent { background: #fff3e0; color: #e65100; }
+.badge-priority-critical { background: #ffebee; color: #c62828; }
 .error { color: #ea4335; font-size: 13px; margin-bottom: 10px; }
 .success { color: #34a853; font-size: 13px; margin-bottom: 10px; }
 .image-preview { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 8px; }

@@ -2,6 +2,12 @@ import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import * as api from '../api';
 
+const PRIORITIES = [
+  { value: 'normal', label: 'Normal' },
+  { value: 'moderate', label: 'Moderate' },
+  { value: 'urgent', label: 'Urgent' },
+  { value: 'critical', label: 'Critical' },
+];
 export default function NewTicket() {
   const navigate = useNavigate();
   const [departments, setDepartments] = useState([]);
@@ -9,9 +15,9 @@ export default function NewTicket() {
   const [categories, setCategories] = useState([]);
   const [locations, setLocations] = useState([]);
   const [images, setImages] = useState([]);
+  const [documents, setDocuments] = useState([]);
   const [error, setError] = useState('');
   const [form, setForm] = useState({
-    ticket_no: '',
     ticket_date: new Date().toISOString().split('T')[0],
     raising_dept_id: '',
     raising_employee_id: '',
@@ -20,6 +26,7 @@ export default function NewTicket() {
     ticket_description: '',
     details: '',
     assigned_to: '',
+    priority: 'normal',
   });
 
   useEffect(() => {
@@ -37,15 +44,24 @@ export default function NewTicket() {
     setImages(Array.from(e.target.files));
   };
 
+  const handleDocumentChange = (e) => {
+    setDocuments(Array.from(e.target.files));
+  };
+
   const handleSubmit = async (e) => {
     e.preventDefault();
     setError('');
+    if (documents.length === 0) {
+      setError('Please upload at least one document file');
+      return;
+    }
     try {
       const fd = new FormData();
       Object.entries(form).forEach(([key, val]) => {
         if (val !== '') fd.append(key, val);
       });
       images.forEach(img => fd.append('images', img));
+      documents.forEach(doc => fd.append('files', doc));
 
       await api.createTicket(fd);
       navigate('/tickets');
@@ -64,12 +80,14 @@ export default function NewTicket() {
         <form onSubmit={handleSubmit}>
           <div className="form-row">
             <div className="form-group">
-              <label>Ticket No</label>
-              <input value={form.ticket_no} onChange={e => handleChange('ticket_no', e.target.value)} required />
-            </div>
-            <div className="form-group">
               <label>Date</label>
               <input type="date" value={form.ticket_date} onChange={e => handleChange('ticket_date', e.target.value)} required />
+            </div>
+            <div className="form-group">
+              <label>Priority</label>
+              <select value={form.priority} onChange={e => handleChange('priority', e.target.value)} required>
+                {PRIORITIES.map(p => <option key={p.value} value={p.value}>{p.label}</option>)}
+              </select>
             </div>
           </div>
 
@@ -124,6 +142,11 @@ export default function NewTicket() {
           <div className="form-group" style={{ marginBottom: 14 }}>
             <label>Details</label>
             <textarea value={form.details} onChange={e => handleChange('details', e.target.value)} />
+          </div>
+
+          <div className="form-group" style={{ marginBottom: 14 }}>
+            <label>Upload Document *</label>
+            <input type="file" accept=".pdf,.doc,.docx,.xls,.xlsx,.txt,.csv,.zip,.ppt,.pptx" multiple onChange={handleDocumentChange} required />
           </div>
 
           <div className="form-group" style={{ marginBottom: 14 }}>

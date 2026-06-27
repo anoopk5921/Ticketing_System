@@ -1,10 +1,24 @@
 const API_BASE = '/api';
 
+async function parseErrorResponse(res) {
+  const text = await res.text();
+  try {
+    const err = JSON.parse(text);
+    if (typeof err.detail === 'string') return err.detail;
+    if (Array.isArray(err.detail)) {
+      return err.detail.map((e) => e.msg || String(e)).join(', ');
+    }
+  } catch {
+    // response was not JSON (e.g. HTML error page from proxy)
+  }
+  if (text && text.length < 300 && !text.includes('<html')) return text;
+  return `Request failed (${res.status})`;
+}
+
 async function request(url, options = {}) {
   const res = await fetch(`${API_BASE}${url}`, options);
   if (!res.ok) {
-    const err = await res.json().catch(() => ({ detail: 'Request failed' }));
-    throw new Error(err.detail || 'Request failed');
+    throw new Error(await parseErrorResponse(res));
   }
   return res.json();
 }
@@ -38,39 +52,28 @@ export const deleteLocation = (id) => request(`/locations/${id}`, { method: 'DEL
 // --- Tickets ---
 export const getTickets = () => request('/tickets/');
 export const getTicket = (id) => request(`/tickets/${id}`);
+export const getNextTicketNumber = () => request('/tickets/next-number');
 
 export async function createTicket(formData) {
   const res = await fetch(`${API_BASE}/tickets/`, { method: 'POST', body: formData });
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({ detail: 'Request failed' }));
-    throw new Error(err.detail || 'Request failed');
-  }
+  if (!res.ok) throw new Error(await parseErrorResponse(res));
   return res.json();
 }
 
 export async function updateTicket(id, formData) {
   const res = await fetch(`${API_BASE}/tickets/${id}`, { method: 'PUT', body: formData });
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({ detail: 'Request failed' }));
-    throw new Error(err.detail || 'Request failed');
-  }
+  if (!res.ok) throw new Error(await parseErrorResponse(res));
   return res.json();
 }
 
 export async function forwardTicket(id, formData) {
   const res = await fetch(`${API_BASE}/tickets/${id}/forward`, { method: 'POST', body: formData });
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({ detail: 'Request failed' }));
-    throw new Error(err.detail || 'Request failed');
-  }
+  if (!res.ok) throw new Error(await parseErrorResponse(res));
   return res.json();
 }
 
 export async function closeTicket(id, formData) {
   const res = await fetch(`${API_BASE}/tickets/${id}/close`, { method: 'POST', body: formData });
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({ detail: 'Request failed' }));
-    throw new Error(err.detail || 'Request failed');
-  }
+  if (!res.ok) throw new Error(await parseErrorResponse(res));
   return res.json();
 }

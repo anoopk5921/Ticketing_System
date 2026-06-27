@@ -19,6 +19,7 @@ export default function TicketList() {
   useEffect(() => { load(); }, []);
 
   const statusLabel = (s) => s.replace('_', ' ');
+  const priorityLabel = (p) => (p || 'normal').charAt(0).toUpperCase() + (p || 'normal').slice(1);
 
   return (
     <div>
@@ -42,6 +43,7 @@ export default function TicketList() {
               <th>Location</th>
               <th>Raised By</th>
               <th>Assigned To</th>
+              <th>Priority</th>
               <th>Status</th>
               <th>Action</th>
             </tr>
@@ -56,6 +58,7 @@ export default function TicketList() {
                 <td>{t.location_name}</td>
                 <td>{t.raising_employee_name}</td>
                 <td>{t.assignee_name}</td>
+                <td><span className={`badge badge-priority-${t.priority || 'normal'}`}>{priorityLabel(t.priority)}</span></td>
                 <td><span className={`badge badge-${t.status}`}>{statusLabel(t.status)}</span></td>
                 <td>
                   <button className="btn btn-sm btn-primary" onClick={() => navigate(`/tickets/${t.id}`)}>
@@ -65,7 +68,7 @@ export default function TicketList() {
               </tr>
             ))}
             {tickets.length === 0 && (
-              <tr><td colSpan={9} style={{ textAlign: 'center', color: '#888' }}>No tickets found</td></tr>
+              <tr><td colSpan={10} style={{ textAlign: 'center', color: '#888' }}>No tickets found</td></tr>
             )}
           </tbody>
         </table>

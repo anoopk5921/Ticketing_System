@@ -2,6 +2,13 @@ import { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import * as api from '../api';
 
+const PRIORITIES = [
+  { value: 'normal', label: 'Normal' },
+  { value: 'moderate', label: 'Moderate' },
+  { value: 'urgent', label: 'Urgent' },
+  { value: 'critical', label: 'Critical' },
+];
+
 export default function TicketDetail() {
   const { id } = useParams();
   const navigate = useNavigate();
@@ -14,6 +21,7 @@ export default function TicketDetail() {
   const [modal, setModal] = useState(null);
   const [actionBy, setActionBy] = useState('');
   const [images, setImages] = useState([]);
+  const [documents, setDocuments] = useState([]);
 
   const [updateForm, setUpdateForm] = useState({});
   const [forwardTo, setForwardTo] = useState('');
@@ -28,6 +36,7 @@ export default function TicketDetail() {
         details: data.details || '',
         complaint_category_id: data.complaint_category_id,
         location_id: data.location_id,
+        priority: data.priority || 'normal',
       });
     } catch (e) {
       setError(e.message);
@@ -41,19 +50,23 @@ export default function TicketDetail() {
     api.getLocations().then(setLocations);
   }, [id]);
 
-  const buildFormData = (extra = {}) => {
+  const buildFormData = (extra = {}, { includeDocuments = false } = {}) => {
     const fd = new FormData();
     fd.append('action_by', actionBy);
     Object.entries(extra).forEach(([k, v]) => {
       if (v !== '' && v !== null && v !== undefined) fd.append(k, v);
     });
     images.forEach(img => fd.append('images', img));
+    if (includeDocuments) {
+      documents.forEach(doc => fd.append('files', doc));
+    }
     return fd;
   };
 
   const resetModal = () => {
     setModal(null);
     setImages([]);
+    setDocuments([]);
     setRemarks('');
     setForwardTo('');
     setError('');
@@ -63,7 +76,7 @@ export default function TicketDetail() {
     e.preventDefault();
     setError('');
     try {
-      const fd = buildFormData({ ...updateForm, remarks });
+      const fd = buildFormData({ ...updateForm, remarks }, { includeDocuments: documents.length > 0 });
       await api.updateTicket(id, fd);
       setMessage('Ticket updated successfully');
       resetModal();
@@ -105,6 +118,9 @@ export default function TicketDetail() {
 
   const isClosed = ticket.status === 'closed';
   const imageUrl = (path) => `/${path}`;
+  const priorityLabel = (p) => (p || 'normal').charAt(0).toUpperCase() + (p || 'normal').slice(1);
+  const imageAttachments = ticket.attachments.filter(a => a.file_type !== 'file');
+  const fileAttachments = ticket.attachments.filter(a => a.file_type === 'file');
 
   return (
     <div>
@@ -119,6 +135,7 @@ export default function TicketDetail() {
       <div className="card">
         <div className="form-row">
           <div className="form-group"><label>Status</label><div><span className={`badge badge-${ticket.status}`}>{ticket.status.replace('_', ' ')}</span></div></div>
+          <div className="form-group"><label>Priority</label><div><span className={`badge badge-priority-${ticket.priority || 'normal'}`}>{priorityLabel(ticket.priority)}</span></div></div>
           <div className="form-group"><label>Date</label><div>{ticket.ticket_date}</div></div>
           <div className="form-group"><label>Category</label><div>{ticket.category_name}</div></div>
           <div className="form-group"><label>Location</label><div>{ticket.location_name}</div></div>
@@ -131,11 +148,24 @@ export default function TicketDetail() {
         <div className="form-group"><label>Description</label><div>{ticket.ticket_description}</div></div>
         <div className="form-group"><label>Details</label><div>{ticket.details || '-'}</div></div>
 
-        {ticket.attachments.length > 0 && (
+        {fileAttachments.length > 0 && (
           <div className="form-group">
-            <label>Attachments</label>
+            <label>Documents</label>
+            <div>
+              {fileAttachments.map(a => (
+                <a key={a.id} href={imageUrl(a.file_path)} target="_blank" rel="noreferrer" className="btn" style={{ marginRight: 8, marginBottom: 8, display: 'inline-block' }}>
+                  {a.file_name}
+                </a>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {imageAttachments.length > 0 && (
+          <div className="form-group">
+            <label>Pictures</label>
             <div className="image-preview">
-              {ticket.attachments.map(a => (
+              {imageAttachments.map(a => (
                 <a key={a.id} href={imageUrl(a.file_path)} target="_blank" rel="noreferrer">
                   <img src={imageUrl(a.file_path)} alt={a.file_name} />
                 </a>
@@ -206,6 +236,12 @@ export default function TicketDetail() {
                       </select>
                     </div>
                   </div>
+                  <div className="form-group" style={{ marginBottom: 10 }}>
+                    <label>Priority</label>
+                    <select value={updateForm.priority || 'normal'} onChange={e => setUpdateForm(p => ({ ...p, priority: e.target.value }))} required>
+                      {PRIORITIES.map(p => <option key={p.value} value={p.value}>{p.label}</option>)}
+                    </select>
+                  </div>
                 </>
               )}
 
@@ -226,10 +262,25 @@ export default function TicketDetail() {
                 <textarea value={remarks} onChange={e => setRemarks(e.target.value)} />
               </div>
 
-              <div className="form-group" style={{ marginBottom: 10 }}>
-                <label>Upload Pictures</label>
-                <input type="file" accept="image/*" multiple onChange={e => setImages(Array.from(e.target.files))} />
-              </div>
+              {modal === 'update' && (
+                <>
+                  <div className="form-group" style={{ marginBottom: 10 }}>
+                    <label>Upload Document</label>
+                    <input type="file" accept=".pdf,.doc,.docx,.xls,.xlsx,.txt,.csv,.zip,.ppt,.pptx" multiple onChange={e => setDocuments(Array.from(e.target.files))} />
+                  </div>
+                  <div className="form-group" style={{ marginBottom: 10 }}>
+                    <label>Upload Pictures</label>
+                    <input type="file" accept="image/*" multiple onChange={e => setImages(Array.from(e.target.files))} />
+                  </div>
+                </>
+              )}
+
+              {modal !== 'update' && (
+                <div className="form-group" style={{ marginBottom: 10 }}>
+                  <label>Upload Pictures</label>
+                  <input type="file" accept="image/*" multiple onChange={e => setImages(Array.from(e.target.files))} />
+                </div>
+              )}
 
               {error && <div className="error">{error}</div>}
 

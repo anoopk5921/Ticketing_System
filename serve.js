@@ -1,5 +1,5 @@
 // Simple static server — no npm build required.
-// Serves the app UI and proxies API calls to the Python backend on port 8000.
+// Serves the app UI and proxies API calls to the Node backend on port 8000.
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
@@ -21,12 +21,15 @@ const MIME = {
 };
 
 function proxy(req, res) {
+  const headers = { ...req.headers, host: `${API_HOST}:${API_PORT}` };
+  delete headers.connection;
+
   const options = {
     hostname: API_HOST,
     port: API_PORT,
     path: req.url,
     method: req.method,
-    headers: req.headers,
+    headers,
   };
 
   const proxyReq = http.request(options, (proxyRes) => {
@@ -34,10 +37,10 @@ function proxy(req, res) {
     proxyRes.pipe(res);
   });
 
-  proxyReq.on('error', () => {
+  proxyReq.on('error', (err) => {
     res.writeHead(502, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({
-      detail: 'Backend not running. Start it with: cd backend-node && npm install && npm start',
+      detail: `API server not reachable on port ${API_PORT}. From the project folder run: npm start`,
     }));
   });
 
@@ -74,5 +77,5 @@ const server = http.createServer((req, res) => {
 server.listen(PORT, () => {
   console.log(`App UI:  http://localhost:${PORT}`);
   console.log(`API proxy -> http://${API_HOST}:${API_PORT}`);
-  console.log('(Start Python backend separately on port 8000)');
+  console.log('(Run npm start from the project folder to start API + UI together)');
 });

@@ -22,6 +22,14 @@ if (!fs.existsSync(UPLOAD_DIR)) fs.mkdirSync(UPLOAD_DIR, { recursive: true });
 
 const upload = multer({ dest: UPLOAD_DIR });
 
+function getUploadGroups(req) {
+  const all = req.files || [];
+  return {
+    images: all.filter((f) => f.fieldname === 'images'),
+    documents: all.filter((f) => f.fieldname === 'files'),
+  };
+}
+
 const app = express();
 app.use(cors());
 app.use('/uploads', express.static(UPLOAD_DIR));
@@ -81,6 +89,7 @@ async function initDb() {
       ticket_description VARCHAR(300) NOT NULL,
       details TEXT,
       assigned_to INT NOT NULL,
+      priority ENUM('normal','moderate','urgent','critical') NOT NULL DEFAULT 'normal',
       status ENUM('open','in_progress','closed','forwarded') NOT NULL DEFAULT 'open',
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
       updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
@@ -90,6 +99,7 @@ async function initDb() {
       ticket_id INT NOT NULL,
       file_name VARCHAR(255) NOT NULL,
       file_path VARCHAR(500) NOT NULL,
+      file_type VARCHAR(20) NOT NULL DEFAULT 'image',
       uploaded_at DATETIME DEFAULT CURRENT_TIMESTAMP,
       uploaded_by INT,
       FOREIGN KEY (ticket_id) REFERENCES tickets(id) ON DELETE CASCADE
@@ -120,6 +130,24 @@ async function initDb() {
     await pool.query('ALTER TABLE employees ADD COLUMN user_id VARCHAR(50) UNIQUE');
     await pool.query('ALTER TABLE employees ADD COLUMN password VARCHAR(255)');
   }
+
+  const [fileTypeCol] = await pool.query(
+    `SELECT COUNT(*) AS cnt FROM information_schema.COLUMNS
+     WHERE TABLE_SCHEMA = ? AND TABLE_NAME = 'ticket_attachments' AND COLUMN_NAME = 'file_type'`,
+    [dbConfig.database]
+  );
+  if (fileTypeCol[0].cnt === 0) {
+    await pool.query("ALTER TABLE ticket_attachments ADD COLUMN file_type VARCHAR(20) NOT NULL DEFAULT 'image'");
+  }
+
+  const [priorityCol] = await pool.query(
+    `SELECT COUNT(*) AS cnt FROM information_schema.COLUMNS
+     WHERE TABLE_SCHEMA = ? AND TABLE_NAME = 'tickets' AND COLUMN_NAME = 'priority'`,
+    [dbConfig.database]
+  );
+  if (priorityCol[0].cnt === 0) {
+    await pool.query("ALTER TABLE tickets ADD COLUMN priority ENUM('normal','moderate','urgent','critical') NOT NULL DEFAULT 'normal'");
+  }
 }
 
 function saveUpload(file) {
@@ -128,6 +156,26 @@ function saveUpload(file) {
   const dest = path.join(UPLOAD_DIR, unique);
   fs.renameSync(file.path, dest);
   return { origName: file.originalname, webPath: `uploads/${unique}` };
+}
+
+const VALID_PRIORITIES = ['normal', 'moderate', 'urgent', 'critical'];
+
+function normalizePriority(value) {
+  const priority = String(value || 'normal').toLowerCase();
+  if (!VALID_PRIORITIES.includes(priority)) {
+    throw new Error('Invalid priority value');
+  }
+  return priority;
+}
+
+async function saveAttachments(ticketId, fileList, fileType, uploadedBy) {
+  for (const file of fileList || []) {
+    const { origName, webPath } = saveUpload(file);
+    await pool.query(
+      'INSERT INTO ticket_attachments (ticket_id, file_name, file_path, uploaded_by, file_type) VALUES (?, ?, ?, ?, ?)',
+      [ticketId, origName, webPath, uploadedBy, fileType]
+    );
+  }
 }
 
 async function getTicketDetail(id) {
@@ -151,7 +199,7 @@ async function getTicketDetail(id) {
   const ticket = rows[0];
 
   const [attachments] = await pool.query(
-    'SELECT id, file_name, file_path, uploaded_at FROM ticket_attachments WHERE ticket_id = ?', [id]
+    'SELECT id, file_name, file_path, file_type, uploaded_at FROM ticket_attachments WHERE ticket_id = ?', [id]
   );
   const [history] = await pool.query(
     'SELECT id, action, action_by, remarks, forwarded_to, created_at FROM ticket_history WHERE ticket_id = ? ORDER BY id',
@@ -162,6 +210,25 @@ async function getTicketDetail(id) {
   ticket.attachments = attachments;
   ticket.history = history;
   return ticket;
+}
+
+async function generateTicketNo() {
+  const today = new Date();
+  const y = today.getFullYear();
+  const m = String(today.getMonth() + 1).padStart(2, '0');
+  const d = String(today.getDate()).padStart(2, '0');
+  const prefix = `TKT-${y}${m}${d}-`;
+  const [rows] = await pool.query(
+    'SELECT ticket_no FROM tickets WHERE ticket_no LIKE ? ORDER BY id DESC LIMIT 1',
+    [`${prefix}%`]
+  );
+  let seq = 1;
+  if (rows.length) {
+    const part = rows[0].ticket_no.split('-').pop();
+    const n = parseInt(part, 10);
+    if (!isNaN(n)) seq = n + 1;
+  }
+  return `${prefix}${String(seq).padStart(3, '0')}`;
 }
 
 // --- Departments ---
@@ -332,12 +399,16 @@ app.get('/api/tickets/', async (req, res) => {
   `);
   for (const t of rows) {
     t.ticket_date = t.ticket_date?.toISOString?.().split('T')[0] || t.ticket_date;
-    const [attachments] = await pool.query('SELECT id, file_name, file_path, uploaded_at FROM ticket_attachments WHERE ticket_id = ?', [t.id]);
+    const [attachments] = await pool.query('SELECT id, file_name, file_path, file_type, uploaded_at FROM ticket_attachments WHERE ticket_id = ?', [t.id]);
     const [history] = await pool.query('SELECT id, action, action_by, remarks, forwarded_to, created_at FROM ticket_history WHERE ticket_id = ? ORDER BY id', [t.id]);
     t.attachments = attachments;
     t.history = history;
   }
   res.json(rows);
+});
+
+app.get('/api/tickets/next-number', async (req, res) => {
+  res.json({ ticket_no: await generateTicketNo() });
 });
 
 app.get('/api/tickets/:id', async (req, res) => {
@@ -346,56 +417,95 @@ app.get('/api/tickets/:id', async (req, res) => {
   res.json(ticket);
 });
 
-app.post('/api/tickets/', upload.array('images'), async (req, res) => {
-  const b = req.body;
-  const [existing] = await pool.query('SELECT id FROM tickets WHERE ticket_no = ?', [b.ticket_no]);
-  if (existing.length) return res.status(400).json({ detail: 'Ticket number already exists' });
+app.post('/api/tickets/', upload.any(), async (req, res) => {
+  try {
+    const b = req.body || {};
+    const { images, documents: documentFiles } = getUploadGroups(req);
+    if (!documentFiles.length) {
+      return res.status(400).json({ detail: 'At least one document file is required' });
+    }
 
-  const [r] = await pool.query(
-    `INSERT INTO tickets (ticket_no, ticket_date, raising_dept_id, raising_employee_id,
-      complaint_category_id, location_id, ticket_description, details, assigned_to, status)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'open')`,
-    [b.ticket_no, b.ticket_date, b.raising_dept_id, b.raising_employee_id,
-      b.complaint_category_id, b.location_id, b.ticket_description, b.details || null, b.assigned_to]
-  );
-  const ticketId = r.insertId;
+    const required = [
+      'ticket_date', 'raising_dept_id', 'raising_employee_id',
+      'complaint_category_id', 'location_id', 'ticket_description', 'assigned_to', 'priority',
+    ];
+    const missing = required.filter((k) => b[k] === undefined || b[k] === '');
+    if (missing.length) {
+      return res.status(400).json({ detail: `Missing required fields: ${missing.join(', ')}` });
+    }
 
-  for (const file of req.files || []) {
-    const { origName, webPath } = saveUpload(file);
-    await pool.query('INSERT INTO ticket_attachments (ticket_id, file_name, file_path, uploaded_by) VALUES (?, ?, ?, ?)',
-      [ticketId, origName, webPath, b.raising_employee_id]);
+    const ticketNo = String(b.ticket_no || '').trim() || await generateTicketNo();
+    let priority;
+    try {
+      priority = normalizePriority(b.priority);
+    } catch {
+      return res.status(400).json({ detail: 'Invalid priority value' });
+    }
+    if (String(b.ticket_no || '').trim()) {
+      const [existing] = await pool.query('SELECT id FROM tickets WHERE ticket_no = ?', [ticketNo]);
+      if (existing.length) return res.status(400).json({ detail: 'Ticket number already exists' });
+    }
+
+    const [r] = await pool.query(
+      `INSERT INTO tickets (ticket_no, ticket_date, raising_dept_id, raising_employee_id,
+        complaint_category_id, location_id, ticket_description, details, assigned_to, priority, status)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open')`,
+      [ticketNo, b.ticket_date, b.raising_dept_id, b.raising_employee_id,
+        b.complaint_category_id, b.location_id, b.ticket_description, b.details || null, b.assigned_to, priority]
+    );
+    const ticketId = r.insertId;
+
+    await saveAttachments(ticketId, images, 'image', b.raising_employee_id);
+    await saveAttachments(ticketId, documentFiles, 'file', b.raising_employee_id);
+    await pool.query('INSERT INTO ticket_history (ticket_id, action, action_by, remarks) VALUES (?, ?, ?, ?)',
+      [ticketId, 'created', b.raising_employee_id, 'Ticket created']);
+
+    res.json(await getTicketDetail(ticketId));
+  } catch (err) {
+    console.error('POST /api/tickets/ failed:', err);
+    res.status(500).json({ detail: err.message || 'Failed to create ticket' });
   }
-  await pool.query('INSERT INTO ticket_history (ticket_id, action, action_by, remarks) VALUES (?, ?, ?, ?)',
-    [ticketId, 'created', b.raising_employee_id, 'Ticket created']);
-
-  res.json(await getTicketDetail(ticketId));
 });
 
-app.put('/api/tickets/:id', upload.array('images'), async (req, res) => {
-  const b = req.body;
-  const [rows] = await pool.query('SELECT * FROM tickets WHERE id = ?', [req.params.id]);
-  if (!rows.length) return res.status(404).json({ detail: 'Ticket not found' });
-  if (rows[0].status === 'closed') return res.status(400).json({ detail: 'Cannot update a closed ticket' });
+app.put('/api/tickets/:id', upload.any(), async (req, res) => {
+  try {
+    const b = req.body || {};
+    const { images, documents: documentFiles } = getUploadGroups(req);
+    const [rows] = await pool.query('SELECT * FROM tickets WHERE id = ?', [req.params.id]);
+    if (!rows.length) return res.status(404).json({ detail: 'Ticket not found' });
+    if (rows[0].status === 'closed') return res.status(400).json({ detail: 'Cannot update a closed ticket' });
 
-  const status = rows[0].status === 'open' ? 'in_progress' : rows[0].status;
-  await pool.query(
-    `UPDATE tickets SET ticket_description=?, details=?, complaint_category_id=?, location_id=?, status=? WHERE id=?`,
-    [b.ticket_description, b.details || null, b.complaint_category_id, b.location_id, status, req.params.id]
-  );
+    let priority = rows[0].priority;
+    if (b.priority !== undefined && b.priority !== '') {
+      try {
+        priority = normalizePriority(b.priority);
+      } catch {
+        return res.status(400).json({ detail: 'Invalid priority value' });
+      }
+    }
 
-  for (const file of req.files || []) {
-    const { origName, webPath } = saveUpload(file);
-    await pool.query('INSERT INTO ticket_attachments (ticket_id, file_name, file_path, uploaded_by) VALUES (?, ?, ?, ?)',
-      [req.params.id, origName, webPath, b.action_by]);
+    const status = rows[0].status === 'open' ? 'in_progress' : rows[0].status;
+    await pool.query(
+      `UPDATE tickets SET ticket_description=?, details=?, complaint_category_id=?, location_id=?, priority=?, status=? WHERE id=?`,
+      [b.ticket_description, b.details || null, b.complaint_category_id, b.location_id, priority, status, req.params.id]
+    );
+
+    await saveAttachments(req.params.id, images, 'image', b.action_by);
+    if (documentFiles.length) {
+      await saveAttachments(req.params.id, documentFiles, 'file', b.action_by);
+    }
+    await pool.query('INSERT INTO ticket_history (ticket_id, action, action_by, remarks) VALUES (?, ?, ?, ?)',
+      [req.params.id, 'updated', b.action_by, b.remarks || 'Ticket updated']);
+
+    res.json(await getTicketDetail(req.params.id));
+  } catch (err) {
+    console.error('PUT /api/tickets/:id failed:', err);
+    res.status(500).json({ detail: err.message || 'Failed to update ticket' });
   }
-  await pool.query('INSERT INTO ticket_history (ticket_id, action, action_by, remarks) VALUES (?, ?, ?, ?)',
-    [req.params.id, 'updated', b.action_by, b.remarks || 'Ticket updated']);
-
-  res.json(await getTicketDetail(req.params.id));
 });
 
 app.post('/api/tickets/:id/forward', upload.array('images'), async (req, res) => {
-  const b = req.body;
+  const b = req.body || {};
   const [rows] = await pool.query('SELECT * FROM tickets WHERE id = ?', [req.params.id]);
   if (!rows.length) return res.status(404).json({ detail: 'Ticket not found' });
   if (rows[0].status === 'closed') return res.status(400).json({ detail: 'Cannot forward a closed ticket' });
@@ -406,9 +516,7 @@ app.post('/api/tickets/:id/forward', upload.array('images'), async (req, res) =>
   await pool.query('UPDATE tickets SET assigned_to = ?, status = ? WHERE id = ?', [b.forward_to, 'forwarded', req.params.id]);
 
   for (const file of req.files || []) {
-    const { origName, webPath } = saveUpload(file);
-    await pool.query('INSERT INTO ticket_attachments (ticket_id, file_name, file_path, uploaded_by) VALUES (?, ?, ?, ?)',
-      [req.params.id, origName, webPath, b.action_by]);
+    await saveAttachments(req.params.id, [file], 'image', b.action_by);
   }
   await pool.query('INSERT INTO ticket_history (ticket_id, action, action_by, forwarded_to, remarks) VALUES (?, ?, ?, ?, ?)',
     [req.params.id, 'forwarded', b.action_by, b.forward_to, b.remarks || `Forwarded to ${emp[0].name}`]);
@@ -417,7 +525,7 @@ app.post('/api/tickets/:id/forward', upload.array('images'), async (req, res) =>
 });
 
 app.post('/api/tickets/:id/close', upload.array('images'), async (req, res) => {
-  const b = req.body;
+  const b = req.body || {};
   const [rows] = await pool.query('SELECT * FROM tickets WHERE id = ?', [req.params.id]);
   if (!rows.length) return res.status(404).json({ detail: 'Ticket not found' });
   if (rows[0].status === 'closed') return res.status(400).json({ detail: 'Ticket is already closed' });
@@ -425,9 +533,7 @@ app.post('/api/tickets/:id/close', upload.array('images'), async (req, res) => {
   await pool.query('UPDATE tickets SET status = ? WHERE id = ?', ['closed', req.params.id]);
 
   for (const file of req.files || []) {
-    const { origName, webPath } = saveUpload(file);
-    await pool.query('INSERT INTO ticket_attachments (ticket_id, file_name, file_path, uploaded_by) VALUES (?, ?, ?, ?)',
-      [req.params.id, origName, webPath, b.action_by]);
+    await saveAttachments(req.params.id, [file], 'image', b.action_by);
   }
   await pool.query('INSERT INTO ticket_history (ticket_id, action, action_by, remarks) VALUES (?, ?, ?, ?)',
     [req.params.id, 'closed', b.action_by, b.remarks || 'Ticket closed']);
@@ -438,6 +544,14 @@ app.post('/api/tickets/:id/close', upload.array('images'), async (req, res) => {
 // Serve UI at root
 app.get('/', (req, res) => {
   res.sendFile(path.join(STATIC_DIR, 'index.html'));
+});
+
+app.use((err, req, res, next) => {
+  if (err && err.name === 'MulterError') {
+    return res.status(400).json({ detail: `Upload error: ${err.message}` });
+  }
+  console.error(err);
+  res.status(500).json({ detail: err.message || 'Internal server error' });
 });
 
 initDb()
