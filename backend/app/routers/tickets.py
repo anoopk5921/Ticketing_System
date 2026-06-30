@@ -124,9 +124,6 @@ async def create_ticket(
     files: List[UploadFile] = File(default=[]),
     db: Session = Depends(get_db),
 ):
-    if not any(f.filename for f in files):
-        raise HTTPException(status_code=400, detail="At least one document file is required")
-
     if not ticket_no or not ticket_no.strip():
         ticket_no = generate_ticket_no(db)
     else:
@@ -157,7 +154,8 @@ async def create_ticket(
     db.flush()
 
     add_attachments(ticket.id, images, "image", raising_employee_id, db)
-    add_attachments(ticket.id, files, "file", raising_employee_id, db)
+    if any(f.filename for f in files):
+        add_attachments(ticket.id, files, "file", raising_employee_id, db)
 
     db.add(models.TicketHistory(
         ticket_id=ticket.id,

@@ -10,7 +10,6 @@ const PRIORITIES = [
 ];
 export default function NewTicket() {
   const navigate = useNavigate();
-  const [departments, setDepartments] = useState([]);
   const [employees, setEmployees] = useState([]);
   const [categories, setCategories] = useState([]);
   const [locations, setLocations] = useState([]);
@@ -19,8 +18,6 @@ export default function NewTicket() {
   const [error, setError] = useState('');
   const [form, setForm] = useState({
     ticket_date: new Date().toISOString().split('T')[0],
-    raising_dept_id: '',
-    raising_employee_id: '',
     complaint_category_id: '',
     location_id: '',
     ticket_description: '',
@@ -30,7 +27,6 @@ export default function NewTicket() {
   });
 
   useEffect(() => {
-    api.getDepartments().then(setDepartments);
     api.getEmployees().then(setEmployees);
     api.getCategories().then(setCategories);
     api.getLocations().then(setLocations);
@@ -51,10 +47,6 @@ export default function NewTicket() {
   const handleSubmit = async (e) => {
     e.preventDefault();
     setError('');
-    if (documents.length === 0) {
-      setError('Please upload at least one document file');
-      return;
-    }
     try {
       const fd = new FormData();
       Object.entries(form).forEach(([key, val]) => {
@@ -69,8 +61,6 @@ export default function NewTicket() {
       setError(e.message);
     }
   };
-
-  const deptEmployees = employees.filter(e => String(e.dept_id) === String(form.raising_dept_id));
 
   return (
     <div>
@@ -87,23 +77,6 @@ export default function NewTicket() {
               <label>Priority</label>
               <select value={form.priority} onChange={e => handleChange('priority', e.target.value)} required>
                 {PRIORITIES.map(p => <option key={p.value} value={p.value}>{p.label}</option>)}
-              </select>
-            </div>
-          </div>
-
-          <div className="form-row">
-            <div className="form-group">
-              <label>Raising Department</label>
-              <select value={form.raising_dept_id} onChange={e => { handleChange('raising_dept_id', e.target.value); handleChange('raising_employee_id', ''); }} required>
-                <option value="">-- Select --</option>
-                {departments.map(d => <option key={d.dept_id} value={d.dept_id}>{d.description}</option>)}
-              </select>
-            </div>
-            <div className="form-group">
-              <label>Raising Employee</label>
-              <select value={form.raising_employee_id} onChange={e => handleChange('raising_employee_id', e.target.value)} required>
-                <option value="">-- Select --</option>
-                {deptEmployees.map(e => <option key={e.emp_id} value={e.emp_id}>{e.name}</option>)}
               </select>
             </div>
           </div>
@@ -145,12 +118,12 @@ export default function NewTicket() {
           </div>
 
           <div className="form-group" style={{ marginBottom: 14 }}>
-            <label>Upload Document *</label>
-            <input type="file" accept=".pdf,.doc,.docx,.xls,.xlsx,.txt,.csv,.zip,.ppt,.pptx" multiple onChange={handleDocumentChange} required />
+            <label>Upload Document (optional)</label>
+            <input type="file" accept=".pdf,.doc,.docx,.xls,.xlsx,.txt,.csv,.zip,.ppt,.pptx" multiple onChange={handleDocumentChange} />
           </div>
 
           <div className="form-group" style={{ marginBottom: 14 }}>
-            <label>Upload Pictures</label>
+            <label>Upload Pictures (optional)</label>
             <input type="file" accept="image/*" multiple onChange={handleImageChange} />
           </div>
 

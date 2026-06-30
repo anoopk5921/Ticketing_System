@@ -1,3 +1,5 @@
+import { authHeaders, clearAuth, getToken } from './auth';
+
 const API_BASE = '/api';
 
 async function parseErrorResponse(res) {
@@ -16,12 +18,42 @@ async function parseErrorResponse(res) {
 }
 
 async function request(url, options = {}) {
-  const res = await fetch(`${API_BASE}${url}`, options);
+  const headers = authHeaders(options.headers || {});
+  if (!(options.body instanceof FormData) && !headers['Content-Type'] && options.body) {
+    headers['Content-Type'] = 'application/json';
+  }
+  const res = await fetch(`${API_BASE}${url}`, { ...options, headers });
+  if (res.status === 401 && getToken()) {
+    clearAuth();
+    window.location.href = '/login';
+    throw new Error('Session expired. Please log in again.');
+  }
   if (!res.ok) {
     throw new Error(await parseErrorResponse(res));
   }
   return res.json();
 }
+
+export async function login(userId, password) {
+  const res = await fetch(`${API_BASE}/auth/login`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ user_id: userId, password }),
+  });
+  if (!res.ok) throw new Error(await parseErrorResponse(res));
+  return res.json();
+}
+
+export async function logout() {
+  try {
+    await fetch(`${API_BASE}/auth/logout`, { method: 'POST', headers: authHeaders() });
+  } catch {
+    // ignore
+  }
+  clearAuth();
+}
+
+export const getCurrentUser = () => request('/auth/me');
 
 // --- Masters ---
 export const getDepartments = () => request('/departments/');
@@ -55,25 +87,45 @@ export const getTicket = (id) => request(`/tickets/${id}`);
 export const getNextTicketNumber = () => request('/tickets/next-number');
 
 export async function createTicket(formData) {
-  const res = await fetch(`${API_BASE}/tickets/`, { method: 'POST', body: formData });
+  const res = await fetch(`${API_BASE}/tickets/`, { method: 'POST', body: formData, headers: authHeaders() });
+  if (res.status === 401) {
+    clearAuth();
+    window.location.href = '/login';
+    throw new Error('Session expired. Please log in again.');
+  }
   if (!res.ok) throw new Error(await parseErrorResponse(res));
   return res.json();
 }
 
 export async function updateTicket(id, formData) {
-  const res = await fetch(`${API_BASE}/tickets/${id}`, { method: 'PUT', body: formData });
+  const res = await fetch(`${API_BASE}/tickets/${id}`, { method: 'PUT', body: formData, headers: authHeaders() });
+  if (res.status === 401) {
+    clearAuth();
+    window.location.href = '/login';
+    throw new Error('Session expired. Please log in again.');
+  }
   if (!res.ok) throw new Error(await parseErrorResponse(res));
   return res.json();
 }
 
 export async function forwardTicket(id, formData) {
-  const res = await fetch(`${API_BASE}/tickets/${id}/forward`, { method: 'POST', body: formData });
+  const res = await fetch(`${API_BASE}/tickets/${id}/forward`, { method: 'POST', body: formData, headers: authHeaders() });
+  if (res.status === 401) {
+    clearAuth();
+    window.location.href = '/login';
+    throw new Error('Session expired. Please log in again.');
+  }
   if (!res.ok) throw new Error(await parseErrorResponse(res));
   return res.json();
 }
 
 export async function closeTicket(id, formData) {
-  const res = await fetch(`${API_BASE}/tickets/${id}/close`, { method: 'POST', body: formData });
+  const res = await fetch(`${API_BASE}/tickets/${id}/close`, { method: 'POST', body: formData, headers: authHeaders() });
+  if (res.status === 401) {
+    clearAuth();
+    window.location.href = '/login';
+    throw new Error('Session expired. Please log in again.');
+  }
   if (!res.ok) throw new Error(await parseErrorResponse(res));
   return res.json();
 }

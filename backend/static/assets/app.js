@@ -1,5 +1,55 @@
 // --- API helpers ---
 const API = '/api';
+const AUTH_KEY = 'ticket_auth';
+const USER_KEY = 'ticket_user';
+const FLASH_KEY = 'ticket_flash';
+
+function getToken() {
+  return sessionStorage.getItem(AUTH_KEY);
+}
+
+function getAuthUser() {
+  const raw = sessionStorage.getItem(USER_KEY);
+  return raw ? JSON.parse(raw) : null;
+}
+
+function setAuth(token, user) {
+  sessionStorage.setItem(AUTH_KEY, token);
+  sessionStorage.setItem(USER_KEY, JSON.stringify(user));
+}
+
+function clearAuth() {
+  sessionStorage.removeItem(AUTH_KEY);
+  sessionStorage.removeItem(USER_KEY);
+}
+
+function setFlash(message, type = 'success') {
+  sessionStorage.setItem(FLASH_KEY, JSON.stringify({ message, type }));
+}
+
+function takeFlash() {
+  const raw = sessionStorage.getItem(FLASH_KEY);
+  if (!raw) return null;
+  sessionStorage.removeItem(FLASH_KEY);
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return null;
+  }
+}
+
+function authHeaders(extra = {}) {
+  const headers = { ...extra };
+  const token = getToken();
+  if (token) headers.Authorization = `Bearer ${token}`;
+  return headers;
+}
+
+function handleUnauthorized() {
+  clearAuth();
+  location.hash = '#/login';
+  renderLogin();
+}
 
 async function parseErrorResponse(res) {
   const text = await res.text();
@@ -17,51 +67,262 @@ async function parseErrorResponse(res) {
 }
 
 async function request(url, options = {}) {
-  const res = await fetch(API + url, options);
+  const res = await fetch(API + url, {
+    ...options,
+    headers: authHeaders(options.headers || {}),
+  });
+  if (res.status === 401) {
+    handleUnauthorized();
+    throw new Error('Session expired. Please log in again.');
+  }
   if (!res.ok) throw new Error(await parseErrorResponse(res));
   return res.json();
 }
 
 async function postForm(url, formData) {
-  const res = await fetch(API + url, { method: 'POST', body: formData });
+  const res = await fetch(API + url, { method: 'POST', body: formData, headers: authHeaders() });
+  if (res.status === 401) {
+    handleUnauthorized();
+    throw new Error('Session expired. Please log in again.');
+  }
   if (!res.ok) throw new Error(await parseErrorResponse(res));
   return res.json();
 }
 
 async function putForm(url, formData) {
-  const res = await fetch(API + url, { method: 'PUT', body: formData });
+  const res = await fetch(API + url, { method: 'PUT', body: formData, headers: authHeaders() });
+  if (res.status === 401) {
+    handleUnauthorized();
+    throw new Error('Session expired. Please log in again.');
+  }
   if (!res.ok) throw new Error(await parseErrorResponse(res));
   return res.json();
 }
 
+window.openAttachment = async (attachmentId, fileName) => {
+  try {
+    const res = await fetch(`${API}/attachments/${attachmentId}/file`, {
+      headers: authHeaders(),
+    });
+    if (res.status === 401) {
+      handleUnauthorized();
+      throw new Error('Session expired. Please log in again.');
+    }
+    if (!res.ok) throw new Error(await parseErrorResponse(res));
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    window.open(url, '_blank', 'noopener');
+    setTimeout(() => URL.revokeObjectURL(url), 60000);
+  } catch (err) {
+    alert(err.message || 'Unable to open document');
+  }
+};
+
+window.loadAttachmentPreview = async (img) => {
+  const id = img.dataset.attId;
+  if (!id) return;
+  try {
+    const res = await fetch(`${API}/attachments/${id}/file`, { headers: authHeaders() });
+    if (!res.ok) return;
+    const blob = await res.blob();
+    img.src = URL.createObjectURL(blob);
+  } catch {
+    // ignore preview errors
+  }
+};
+
 // --- Router ---
 const main = document.getElementById('main');
 const sidebar = document.getElementById('sidebar');
+const appHeader = document.getElementById('appHeader');
+const contentArea = document.getElementById('contentArea');
 
-const NAV = [
-  { section: 'Tickets' },
-  { hash: '#/tickets', label: 'All Tickets' },
-  { hash: '#/tickets/new', label: 'New Ticket' },
-  { section: 'Masters' },
-  { hash: '#/masters/departments', label: 'Departments' },
-  { hash: '#/masters/roles', label: 'Roles' },
-  { hash: '#/masters/employees', label: 'Employees' },
-  { hash: '#/masters/categories', label: 'Categories' },
-  { hash: '#/masters/locations', label: 'Locations' },
-];
+function getPermissions() {
+  return getAuthUser()?.permissions || {};
+}
+
+function can(perm) {
+  return !!getPermissions()[perm];
+}
+
+function canAccessScheduleJobsNav() {
+  return !!getAuthUser();
+}
+
+function canCreateScheduleJobs() {
+  return !!getAuthUser();
+}
+
+function canEditScheduleJob(job) {
+  const user = getAuthUser();
+  if (!user || !job) return false;
+  if (isAdminUser()) return true;
+  return Number(job.raising_employee_id) === Number(user.emp_id);
+}
+
+function isAdminUser() {
+  return String(getAuthUser()?.role_name || '').toLowerCase() === 'admin';
+}
+
+function isDeptViewer() {
+  const name = String(getAuthUser()?.role_name || '').toLowerCase();
+  return name === 'manager' || name.includes('supervisor');
+}
+
+function canModifyTicket(ticket) {
+  if (!ticket || ticket.status === 'closed') return false;
+  const user = getAuthUser();
+  if (!user) return false;
+  if (isAdminUser()) return true;
+  if (Number(ticket.assigned_to) === Number(user.emp_id)) return true;
+  if (can('can_edit')) return true;
+  return false;
+}
+
+const ACTION_LABELS = {
+  created: 'Created',
+  updated: 'Updated',
+  forwarded: 'Forwarded',
+  closed: 'Closed',
+  comment: 'Comment',
+};
+
+function updateStoredUser(user) {
+  if (user) sessionStorage.setItem(USER_KEY, JSON.stringify(user));
+}
+
+async function refreshAuthUser() {
+  try {
+    const data = await request('/auth/me');
+    if (data.user) {
+      updateStoredUser(data.user);
+      return data.user;
+    }
+  } catch {
+    // ignore
+  }
+  return getAuthUser();
+}
+
+function getNavItems() {
+  const items = [{ section: 'Main' }];
+  items.push({ hash: '#/dashboard', label: 'Dashboard' });
+  items.push({ section: 'Tickets' });
+  if (isAdminUser() || can('can_view_all')) {
+    items.push({ hash: '#/tickets', label: 'All Tickets' });
+  } else {
+    items.push({ hash: '#/tickets', label: 'My Tickets' });
+  }
+  if (can('can_create')) {
+    items.push({ hash: '#/tickets/new', label: 'New Ticket' });
+  }
+  items.push({ hash: '#/schedule-jobs', label: 'Schedule Jobs' });
+  if (isDeptViewer()) {
+    items.push({ hash: '#/tickets/department', label: 'Department Tickets' });
+  }
+  if (can('can_manage_permissions')) {
+    items.push({ section: 'Admin' });
+    items.push({ hash: '#/admin/permissions', label: 'Role Permissions' });
+  }
+  if (can('can_manage_masters')) {
+    items.push({ section: 'Masters' });
+    items.push({ hash: '#/masters/departments', label: 'Departments' });
+    if (isAdminUser()) {
+      items.push({ hash: '#/masters/roles', label: 'Roles' });
+    }
+    items.push({ hash: '#/masters/employees', label: 'Employees' });
+    items.push({ hash: '#/masters/categories', label: 'Categories' });
+    items.push({ hash: '#/masters/locations', label: 'Locations' });
+  }
+  return items;
+}
 
 function navigate(hash) {
   location.hash = hash;
 }
 
 function renderSidebar() {
-  const current = location.hash || '#/tickets';
-  sidebar.innerHTML = '<h1>Ticketing System</h1>' + NAV.map(item => {
+  const current = location.hash || '#/dashboard';
+  sidebar.style.display = '';
+  sidebar.innerHTML = '<h1>Ticketing System</h1>' + getNavItems().map(item => {
     if (item.section) return `<div class="section-title">${item.section}</div>`;
     const active = current === item.hash ? 'active' : '';
     return `<a class="${active}" href="${item.hash}">${item.label}</a>`;
   }).join('');
 }
+
+function renderHeader() {
+  const user = getAuthUser();
+  appHeader.style.display = 'flex';
+  contentArea.style.display = 'flex';
+  appHeader.innerHTML = `
+    <div class="app-header-user">
+      <span class="user-name">${esc(user?.name || '')}</span>
+      <button type="button" class="btn btn-sm header-logout" onclick="logout()">Logout</button>
+    </div>`;
+}
+
+function renderLogin() {
+  sidebar.style.display = 'none';
+  appHeader.style.display = 'none';
+  contentArea.style.display = 'block';
+  main.innerHTML = `
+    <div class="login-page">
+      <div class="login-card card">
+        <h2 class="login-title">Ticketing System</h2>
+        <p class="login-subtitle">Sign in with your employee credentials</p>
+        <form id="loginForm" onsubmit="submitLogin(event)">
+          <div class="form-group" style="margin-bottom:14px">
+            <label>User ID</label>
+            <input name="user_id" required autocomplete="username" />
+          </div>
+          <div class="form-group" style="margin-bottom:14px">
+            <label>Password</label>
+            <input type="password" name="password" required autocomplete="current-password" />
+          </div>
+          <div id="loginError" class="error"></div>
+          <button type="submit" class="btn btn-primary" style="width:100%">Login</button>
+        </form>
+      </div>
+    </div>`;
+}
+
+window.submitLogin = async (e) => {
+  e.preventDefault();
+  const fd = new FormData(e.target);
+  const errEl = document.getElementById('loginError');
+  errEl.textContent = '';
+  try {
+    const res = await fetch(API + '/auth/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        user_id: fd.get('user_id'),
+        password: fd.get('password'),
+      }),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.detail || 'Login failed');
+    }
+    const data = await res.json();
+    setAuth(data.token, data.user);
+    await refreshAuthUser();
+    navigate('#/dashboard');
+  } catch (err) {
+    errEl.textContent = err.message;
+  }
+};
+
+window.logout = async () => {
+  try {
+    await fetch(API + '/auth/logout', { method: 'POST', headers: authHeaders() });
+  } catch {
+    // ignore
+  }
+  clearAuth();
+  renderLogin();
+};
 
 function esc(s) {
   if (s == null) return '';
@@ -316,11 +577,455 @@ window.saveEmployee = async (e) => {
   } catch (err) { masterState.error = err.message; renderEmployees(); }
 };
 
-// --- Ticket List ---
-async function renderTicketList() {
-  main.innerHTML = '<h2 class="page-title">Tickets</h2><p>Loading...</p>';
+// --- Dashboard ---
+let dashMonth = { year: new Date().getFullYear(), month: new Date().getMonth() + 1 };
+
+window.shiftDashMonth = (delta) => {
+  let m = dashMonth.month + delta;
+  let y = dashMonth.year;
+  while (m < 1) { m += 12; y -= 1; }
+  while (m > 12) { m -= 12; y += 1; }
+  dashMonth = { year: y, month: m };
+  renderDashboard();
+};
+
+window.resetDashMonth = () => {
+  const now = new Date();
+  dashMonth = { year: now.getFullYear(), month: now.getMonth() + 1 };
+  renderDashboard();
+};
+
+function renderDashPeriodNav(period) {
+  const now = new Date();
+  const isCurrent = period?.year === now.getFullYear() && period?.month === now.getMonth() + 1;
+  return `<div class="dash-period-nav">
+    <button type="button" class="btn btn-sm" onclick="shiftDashMonth(-1)">← Previous</button>
+    <span class="dash-period-label">${esc(period?.label || '')}</span>
+    <button type="button" class="btn btn-sm" onclick="shiftDashMonth(1)">Next →</button>
+    ${isCurrent ? '' : '<button type="button" class="btn btn-sm" onclick="resetDashMonth()">Current Month</button>'}
+  </div>
+  <p class="dash-period-hint">Statistics and tickets shown for this month only (by ticket date).</p>`;
+}
+function renderStatCards(summary, prefix = '') {
+  const items = [
+    { key: 'total', label: 'Total', cls: 'stat-total' },
+    { key: 'open', label: 'Open', cls: 'stat-open' },
+    { key: 'in_progress', label: 'In Progress', cls: 'stat-progress' },
+    { key: 'forwarded', label: 'Forwarded', cls: 'stat-forwarded' },
+    { key: 'closed', label: 'Completed', cls: 'stat-closed' },
+  ];
+  return `<div class="stat-grid">${items.map((item) =>
+    `<div class="stat-card ${item.cls}">
+      <div class="stat-value">${summary?.[item.key] || 0}</div>
+      <div class="stat-label">${esc(item.label)}</div>
+    </div>`
+  ).join('')}</div>`;
+}
+
+function renderDashboardTicketTable(tickets, emptyText) {
+  if (!tickets?.length) {
+    return `<p class="dash-empty">${esc(emptyText)}</p>`;
+  }
+  const rows = tickets.map((t) => `<tr>
+    <td><a href="#/tickets/${t.id}">${esc(t.ticket_no)}</a></td>
+    <td>${esc(t.ticket_description)}</td>
+    <td>${badge(t.status)}</td>
+    <td>${priorityBadge(t.priority)}</td>
+    <td>${esc(t.raising_employee_name)}</td>
+    <td>${esc(t.assignee_name)}</td>
+    <td>${t.ticket_date || '-'}</td>
+    <td>${t.status === 'closed' ? formatDateTime(t.completed_at || t.updated_at) : '-'}</td>
+    <td>${t.status === 'closed' ? esc(t.closed_by_name || '-') : '-'}</td>
+    <td><a class="btn btn-sm btn-primary" href="#/tickets/${t.id}">View</a></td>
+  </tr>`).join('');
+  return `<div class="dash-table-wrap"><table>
+    <thead><tr>
+      <th>Ticket No</th><th>Description</th><th>Status</th><th>Priority</th>
+      <th>Raised By</th><th>Assigned To</th><th>Date</th><th>Completed</th><th>Closed By</th><th></th>
+    </tr></thead>
+    <tbody>${rows}</tbody>
+  </table></div>`;
+}
+
+function formatDateTime(value) {
+  if (!value) return '-';
+  return new Date(value).toLocaleString();
+}
+
+async function renderDashboard() {
+  main.innerHTML = '<h2 class="page-title">Dashboard</h2><p>Loading...</p>';
   try {
-    const tickets = await request('/tickets/');
+    const data = await request(`/dashboard/?year=${dashMonth.year}&month=${dashMonth.month}`);
+    const user = data.user || getAuthUser();
+    const flash = takeFlash();
+    const flashHtml = flash ? `<div class="${esc(flash.type)}">${esc(flash.message)}</div>` : '';
+
+    let html = `
+      <div class="header-row">
+        <h2 class="page-title">Dashboard</h2>
+      </div>
+      ${flashHtml}
+      <div class="card dash-period-card">
+        ${renderDashPeriodNav(data.period)}
+      </div>
+      <div class="card dash-welcome">
+        <h3>Welcome, ${esc(user?.name || '')}</h3>
+        <p>${esc(user?.role_name || '')}${user?.department_name ? ` · ${esc(user.department_name)}` : ''}</p>
+      </div>`;
+
+    if (data.all_work) {
+      html += `
+      <div class="card">
+        <h3 class="dash-section-title">All Tickets Overview</h3>
+        ${renderStatCards(data.all_work.summary)}
+      </div>`;
+    }
+
+    html += `
+      <div class="card">
+        <h3 class="dash-section-title">My Work</h3>
+        ${renderStatCards(data.my_work.summary)}
+      </div>
+      <div class="card">
+        <h3 class="dash-section-title">Assigned To Me</h3>
+        ${renderDashboardTicketTable(data.my_work.assigned_to_me, 'No tickets assigned to you.')}
+      </div>
+      <div class="card">
+        <h3 class="dash-section-title">Created By Me</h3>
+        ${renderDashboardTicketTable(data.my_work.created_by_me, 'You have not created any tickets.')}
+      </div>
+      <div class="card">
+        <h3 class="dash-section-title">My Completed Work</h3>
+        ${renderDashboardTicketTable(data.my_work.completed, 'No completed tickets in your work.')}
+      </div>`;
+
+    if (data.department_work) {
+      html += `
+      <div class="card dash-dept-card">
+        <h3 class="dash-section-title">Department Work — ${esc(data.department_work.department_name || user?.department_name || 'Department')}</h3>
+        ${renderStatCards(data.department_work.summary)}
+      </div>
+      <div class="card">
+        <h3 class="dash-section-title">Department — Assigned To Me</h3>
+        ${renderDashboardTicketTable(data.department_work.assigned_to_me, 'No department tickets assigned to you.')}
+      </div>
+      <div class="card">
+        <h3 class="dash-section-title">Department — Created By Me</h3>
+        ${renderDashboardTicketTable(data.department_work.created_by_me, 'No department tickets created by you.')}
+      </div>
+      <div class="card">
+        <h3 class="dash-section-title">All Department Tickets</h3>
+        ${renderDashboardTicketTable(data.department_work.tickets, 'No tickets in your department.')}
+      </div>
+      <div class="card">
+        <h3 class="dash-section-title">Department Completed Work</h3>
+        ${renderDashboardTicketTable(data.department_work.completed, 'No completed tickets in your department.')}
+      </div>`;
+    }
+
+    main.innerHTML = html;
+  } catch (e) {
+    main.innerHTML = `<h2 class="page-title">Dashboard</h2><div class="error">${esc(e.message)}</div>`;
+  }
+}
+
+// --- Schedule Jobs ---
+const SCHEDULE_TYPE_LABELS = {
+  once: 'One-time',
+  daily: 'Daily',
+  weekly: 'Weekly',
+  monthly: 'Monthly',
+  periodic: 'Periodic',
+};
+const DAY_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+
+let scheduleState = { editId: null, form: {}, message: '', error: '' };
+
+function scheduleTypeSummary(job) {
+  switch (job.schedule_type) {
+    case 'once': return `Once on ${job.run_date || '-'}`;
+    case 'daily': return 'Every day';
+    case 'weekly': return `Weekly on ${DAY_NAMES[job.day_of_week] || '-'}`;
+    case 'monthly': return `Monthly on day ${job.day_of_month || '-'}`;
+    case 'periodic':
+      return `Every ${job.interval_days} day(s)${job.end_date ? ` until ${job.end_date}` : ''}`;
+    default: return job.schedule_type;
+  }
+}
+
+function renderScheduleTypeFields(form = {}) {
+  const type = form.schedule_type || 'once';
+  const today = new Date().toISOString().split('T')[0];
+  return `
+    <div class="form-row schedule-fields schedule-once" style="display:${type === 'once' ? 'flex' : 'none'}">
+      <div class="form-group"><label>Run Date</label>
+        <input type="date" name="run_date" value="${esc(form.run_date || today)}" /></div>
+    </div>
+    <div class="form-row schedule-fields schedule-daily" style="display:${type === 'daily' ? 'flex' : 'none'}">
+      <div class="form-group"><label>Start From</label>
+        <input type="date" name="start_date" value="${esc(form.start_date || today)}" /></div>
+    </div>
+    <div class="form-row schedule-fields schedule-weekly" style="display:${type === 'weekly' ? 'flex' : 'none'}">
+      <div class="form-group"><label>Day of Week</label>
+        <select name="day_of_week">
+          ${DAY_NAMES.map((d, i) => `<option value="${i}" ${Number(form.day_of_week) === i ? 'selected' : ''}>${d}</option>`).join('')}
+        </select></div>
+      <div class="form-group"><label>Start From</label>
+        <input type="date" name="start_date" value="${esc(form.start_date || today)}" /></div>
+    </div>
+    <div class="form-row schedule-fields schedule-monthly" style="display:${type === 'monthly' ? 'flex' : 'none'}">
+      <div class="form-group"><label>Day of Month</label>
+        <input type="number" name="day_of_month" min="1" max="31" value="${esc(form.day_of_month || 1)}" /></div>
+    </div>
+    <div class="form-row schedule-fields schedule-periodic" style="display:${type === 'periodic' ? 'flex' : 'none'}">
+      <div class="form-group"><label>Every (days)</label>
+        <input type="number" name="interval_days" min="1" value="${esc(form.interval_days || 7)}" /></div>
+      <div class="form-group"><label>Start Date</label>
+        <input type="date" name="start_date" value="${esc(form.start_date || today)}" /></div>
+      <div class="form-group"><label>End Date (optional)</label>
+        <input type="date" name="end_date" value="${esc(form.end_date || '')}" /></div>
+    </div>`;
+}
+
+window.onScheduleTypeChange = (sel) => {
+  const type = sel.value;
+  document.querySelectorAll('.schedule-fields').forEach((el) => { el.style.display = 'none'; });
+  const target = document.querySelector(`.schedule-${type}`);
+  if (target) target.style.display = 'flex';
+};
+
+async function renderScheduleJobs() {
+  const [jobs, employees, categories, locations] = await Promise.all([
+    request('/scheduled-jobs/'),
+    request('/employees/'),
+    request('/categories/'),
+    request('/locations/'),
+  ]);
+
+  const form = scheduleState.form;
+  const rows = jobs.map((j) => {
+    const actions = canEditScheduleJob(j)
+      ? `<button type="button" class="btn btn-sm" onclick="editScheduleJob(${j.id})">Edit</button>
+         ${j.is_active ? `<button type="button" class="btn btn-sm btn-danger" onclick="closeScheduleJob(${j.id})">Close</button>` : ''}`
+      : '';
+    return `<tr>
+    <td>${esc(j.job_name)}</td>
+    <td>${esc(SCHEDULE_TYPE_LABELS[j.schedule_type] || j.schedule_type)}</td>
+    <td>${esc(scheduleTypeSummary(j))}</td>
+    <td>${esc(j.ticket_description)}</td>
+    <td>${esc(j.assignee_name)}</td>
+    <td>${esc(j.raising_employee_name || '-')}</td>
+    <td>${j.next_run_date || '-'}</td>
+    <td>${j.last_run_date || '-'}</td>
+    <td>${j.is_active ? '<span class="badge badge-open">Active</span>' : '<span class="badge badge-closed">Inactive</span>'}</td>
+    <td>${actions}</td>
+  </tr>`;
+  }).join('');
+
+  main.innerHTML = `
+    <div class="header-row">
+      <h2 class="page-title">Schedule Jobs</h2>
+    </div>
+    <p class="page-subtitle">Each employee can create scheduled jobs and manage only the jobs they created (view, edit, and close). Admin can manage all jobs.</p>
+    <div class="card">
+      <h3 class="dash-section-title">${scheduleState.editId ? 'Edit Scheduled Job' : 'New Scheduled Job'}</h3>
+      ${scheduleState.error ? `<div class="error">${esc(scheduleState.error)}</div>` : ''}
+      ${scheduleState.message ? `<div class="success">${esc(scheduleState.message)}</div>` : ''}
+      <form id="scheduleJobForm" onsubmit="saveScheduleJob(event)">
+        <div class="form-row">
+          <div class="form-group"><label>Job Name</label>
+            <input name="job_name" value="${esc(form.job_name || '')}" required /></div>
+          <div class="form-group"><label>Schedule Type</label>
+            <select name="schedule_type" onchange="onScheduleTypeChange(this)" required>
+              ${Object.entries(SCHEDULE_TYPE_LABELS).map(([k, v]) =>
+                `<option value="${k}" ${(form.schedule_type || 'once') === k ? 'selected' : ''}>${v}</option>`
+              ).join('')}
+            </select></div>
+        </div>
+        ${renderScheduleTypeFields(form)}
+        <div class="form-row">
+          <div class="form-group"><label>Complaint Category</label>
+            <select name="complaint_category_id" required>
+              <option value="">-- Select --</option>
+              ${categories.map((c) => `<option value="${c.id}" ${Number(form.complaint_category_id) === c.id ? 'selected' : ''}>${esc(c.category_description)}</option>`).join('')}
+            </select></div>
+          <div class="form-group"><label>Location</label>
+            <select name="location_id" required>
+              <option value="">-- Select --</option>
+              ${locations.map((l) => `<option value="${l.id}" ${Number(form.location_id) === l.id ? 'selected' : ''}>${esc(l.location_name)}</option>`).join('')}
+            </select></div>
+        </div>
+        <div class="form-row">
+          <div class="form-group"><label>Ticket Description</label>
+            <input name="ticket_description" value="${esc(form.ticket_description || '')}" required /></div>
+          <div class="form-group"><label>Assigned To</label>
+            <select name="assigned_to" required>
+              <option value="">-- Select --</option>
+              ${employees.map((e) => `<option value="${e.emp_id}" ${Number(form.assigned_to) === e.emp_id ? 'selected' : ''}>${esc(e.name)}</option>`).join('')}
+            </select></div>
+        </div>
+        <div class="form-row">
+          <div class="form-group"><label>Priority</label>
+            <select name="priority">
+              ${['normal', 'moderate', 'urgent', 'critical'].map((p) =>
+                `<option value="${p}" ${(form.priority || 'normal') === p ? 'selected' : ''}>${p.charAt(0).toUpperCase() + p.slice(1)}</option>`
+              ).join('')}
+            </select></div>
+          ${scheduleState.editId ? `<div class="form-group"><label>Status</label>
+            <select name="is_active">
+              <option value="1" ${form.is_active !== false && form.is_active !== 0 ? 'selected' : ''}>Active</option>
+              <option value="0" ${form.is_active === false || form.is_active === 0 ? 'selected' : ''}>Inactive</option>
+            </select></div>` : ''}
+        </div>
+        <div class="form-group" style="margin-bottom:14px"><label>Details (optional)</label>
+          <textarea name="details">${esc(form.details || '')}</textarea></div>
+        <button type="submit" class="btn btn-primary">${scheduleState.editId ? 'Update Job' : 'Create Job'}</button>
+        ${scheduleState.editId ? '<button type="button" class="btn" onclick="cancelScheduleJob()" style="margin-left:8px">Cancel</button>' : ''}
+      </form>
+    </div>
+    <div class="card">
+      <h3 class="dash-section-title">Scheduled Jobs</h3>
+      <div class="dash-table-wrap"><table>
+        <thead><tr>
+          <th>Job Name</th><th>Type</th><th>Schedule</th><th>Description</th>
+          <th>Assignee</th><th>Created By</th><th>Next Run</th><th>Last Run</th><th>Status</th><th>Actions</th>
+        </tr></thead>
+        <tbody>${rows || '<tr><td colspan="10" style="text-align:center;color:#888">No scheduled jobs yet</td></tr>'}</tbody>
+      </table></div>
+    </div>`;
+}
+
+window.editScheduleJob = async (id) => {
+  try {
+    const job = await request(`/scheduled-jobs/${id}`);
+    if (!canEditScheduleJob(job)) {
+      scheduleState.error = 'You do not have permission to edit this job';
+      renderScheduleJobs();
+      return;
+    }
+    scheduleState.editId = id;
+    scheduleState.form = { ...job };
+    scheduleState.message = '';
+    scheduleState.error = '';
+    renderScheduleJobs();
+  } catch (e) {
+    scheduleState.error = e.message;
+    renderScheduleJobs();
+  }
+};
+
+window.cancelScheduleJob = () => {
+  scheduleState = { editId: null, form: {}, message: '', error: '' };
+  renderScheduleJobs();
+};
+
+window.closeScheduleJob = async (id) => {
+  if (!confirm('Close this scheduled job? No more tickets will be auto-created.')) return;
+  try {
+    const job = await request(`/scheduled-jobs/${id}`);
+    if (!canEditScheduleJob(job)) {
+      scheduleState.error = 'You do not have permission to close this job';
+      renderScheduleJobs();
+      return;
+    }
+    await request(`/scheduled-jobs/${id}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ...job, is_active: false }),
+    });
+    scheduleState.message = 'Job closed successfully';
+    scheduleState.error = '';
+    if (scheduleState.editId === id) {
+      scheduleState.editId = null;
+      scheduleState.form = {};
+    }
+    renderScheduleJobs();
+  } catch (e) {
+    scheduleState.error = e.message;
+    renderScheduleJobs();
+  }
+};
+
+window.deleteScheduleJob = async (id) => {
+  if (!confirm('Delete this scheduled job?')) return;
+  try {
+    await request(`/scheduled-jobs/${id}`, { method: 'DELETE' });
+    scheduleState.message = 'Job deleted';
+    scheduleState.error = '';
+    if (scheduleState.editId === id) {
+      scheduleState.editId = null;
+      scheduleState.form = {};
+    }
+    await refreshAuthUser();
+    renderSidebar();
+    renderScheduleJobs();
+  } catch (e) {
+    scheduleState.error = e.message;
+    renderScheduleJobs();
+  }
+};
+
+window.saveScheduleJob = async (e) => {
+  e.preventDefault();
+  const fd = new FormData(e.target);
+  const data = {};
+  ['job_name', 'schedule_type', 'run_date', 'start_date', 'end_date', 'day_of_week', 'day_of_month',
+    'interval_days', 'complaint_category_id', 'location_id', 'ticket_description', 'details',
+    'assigned_to', 'priority'].forEach((k) => {
+    const v = fd.get(k);
+    if (v !== null && v !== '') data[k] = v;
+  });
+  if (scheduleState.editId) {
+    data.is_active = fd.get('is_active') === '1';
+  }
+  try {
+    if (scheduleState.editId) {
+      await request(`/scheduled-jobs/${scheduleState.editId}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(data),
+      });
+      scheduleState.message = 'Job updated successfully';
+    } else {
+      await request('/scheduled-jobs/', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(data),
+      });
+      scheduleState.message = 'Job created successfully';
+    }
+    scheduleState.editId = null;
+    scheduleState.form = {};
+    scheduleState.error = '';
+    await refreshAuthUser();
+    renderSidebar();
+    renderScheduleJobs();
+  } catch (err) {
+    scheduleState.error = err.message;
+    renderScheduleJobs();
+  }
+};
+
+// --- Ticket List ---
+async function renderTicketList(scope) {
+  if (!can('can_view')) {
+    main.innerHTML = '<h2 class="page-title">Tickets</h2><div class="error">You do not have permission to view tickets.</div>';
+    return;
+  }
+
+  let listTitle = 'My Tickets';
+  let apiUrl = '/tickets/?scope=my';
+  if (isAdminUser() || can('can_view_all')) {
+    listTitle = 'All Tickets';
+    apiUrl = '/tickets/';
+  } else if (scope === 'department' && isDeptViewer()) {
+    listTitle = 'Department Tickets';
+    apiUrl = '/tickets/?scope=department';
+  }
+
+  main.innerHTML = `<h2 class="page-title">${listTitle}</h2><p>Loading...</p>`;
+  try {
+    const tickets = await request(apiUrl);
     const rows = tickets.map(t => `<tr>
       <td>${esc(t.ticket_no)}</td><td>${t.ticket_date}</td><td>${esc(t.ticket_description)}</td>
       <td>${esc(t.category_name)}</td><td>${esc(t.location_name)}</td>
@@ -330,24 +1035,38 @@ async function renderTicketList() {
       <td><a class="btn btn-sm btn-primary" href="#/tickets/${t.id}">View</a></td>
     </tr>`).join('');
 
+    const newBtn = can('can_create')
+      ? `<a class="btn btn-primary" href="#/tickets/new">+ New Ticket</a>`
+      : '';
+
+    const flash = takeFlash();
+    const flashHtml = flash
+      ? `<div class="${esc(flash.type)}">${esc(flash.message)}</div>`
+      : '';
+
     main.innerHTML = `
       <div class="header-row">
-        <h2 class="page-title">Tickets</h2>
-        <a class="btn btn-primary" href="#/tickets/new">+ New Ticket</a>
+        <h2 class="page-title">${listTitle}</h2>
+        ${newBtn}
       </div>
+      ${flashHtml}
       <div class="card"><table>
         <thead><tr><th>Ticket No</th><th>Date</th><th>Description</th><th>Category</th><th>Location</th><th>Raised By</th><th>Assigned To</th><th>Priority</th><th>Status</th><th>Action</th></tr></thead>
-        <tbody>${rows || '<tr><td colspan="10" style="text-align:center;color:#888">No tickets</td></tr>'}</tbody>
+        <tbody>${rows || `<tr><td colspan="10" style="text-align:center;color:#888">No tickets ${isAdminUser() || can('can_view_all') ? '' : scope === 'department' ? 'in your department' : 'for you'}</td></tr>`}</tbody>
       </table></div>`;
   } catch (e) {
-    main.innerHTML = `<h2 class="page-title">Tickets</h2><div class="error">${esc(e.message)}</div>`;
+    main.innerHTML = `<h2 class="page-title">${listTitle}</h2><div class="error">${esc(e.message)}</div>`;
   }
 }
 
 // --- New Ticket ---
 async function renderNewTicket() {
-  const [departments, employees, categories, locations] = await Promise.all([
-    request('/departments/'), request('/employees/'), request('/categories/'), request('/locations/'),
+  if (!can('can_create')) {
+    main.innerHTML = '<h2 class="page-title">Create New Ticket</h2><div class="error">You do not have permission to create tickets.</div>';
+    return;
+  }
+  const [employees, categories, locations] = await Promise.all([
+    request('/employees/'), request('/categories/'), request('/locations/'),
   ]);
 
   const today = new Date().toISOString().split('T')[0];
@@ -364,15 +1083,6 @@ async function renderNewTicket() {
               <option value="urgent">Urgent</option>
               <option value="critical">Critical</option>
             </select></div>
-        </div>
-        <div class="form-row">
-          <div class="form-group"><label>Raising Department</label>
-            <select name="raising_dept_id" id="raisingDept" required onchange="filterEmployees()">
-              <option value="">-- Select --</option>
-              ${departments.map(d => `<option value="${d.dept_id}">${esc(d.description)}</option>`).join('')}
-            </select></div>
-          <div class="form-group"><label>Raising Employee</label>
-            <select name="raising_employee_id" id="raisingEmp" required><option value="">-- Select Dept first --</option></select></div>
         </div>
         <div class="form-row">
           <div class="form-group"><label>Complaint Category</label>
@@ -395,36 +1105,22 @@ async function renderNewTicket() {
             </select></div>
         </div>
         <div class="form-group" style="margin-bottom:14px"><label>Details</label><textarea name="details"></textarea></div>
-        <div class="form-group" style="margin-bottom:14px"><label>Upload Document *</label><input type="file" name="files" accept=".pdf,.doc,.docx,.xls,.xlsx,.txt,.csv,.zip,.ppt,.pptx" multiple required /></div>
-        <div class="form-group" style="margin-bottom:14px"><label>Upload Pictures</label><input type="file" name="images" accept="image/*" multiple /></div>
+        <div class="form-group" style="margin-bottom:14px"><label>Upload Document (optional)</label><input type="file" name="files" accept=".pdf,.doc,.docx,.xls,.xlsx,.txt,.csv,.zip,.ppt,.pptx" multiple /></div>
+        <div class="form-group" style="margin-bottom:14px"><label>Upload Pictures (optional)</label><input type="file" name="images" accept="image/*" multiple /></div>
         <div id="formError" class="error"></div>
         <button type="submit" class="btn btn-primary">Create Ticket</button>
         <a class="btn" href="#/tickets" style="margin-left:8px">Cancel</a>
       </form>
     </div>`;
-
-  window._allEmployees = employees;
 }
-
-window.filterEmployees = () => {
-  const deptId = document.getElementById('raisingDept').value;
-  const sel = document.getElementById('raisingEmp');
-  const filtered = window._allEmployees.filter(e => String(e.dept_id) === deptId);
-  sel.innerHTML = '<option value="">-- Select --</option>' +
-    filtered.map(e => `<option value="${e.emp_id}">${esc(e.name)}</option>`).join('');
-};
 
 window.submitNewTicket = async (e) => {
   e.preventDefault();
   const fd = new FormData(e.target);
   const imageFiles = e.target.querySelector('[name=images]').files;
   const documentFiles = e.target.querySelector('[name=files]').files;
-  if (!documentFiles.length) {
-    document.getElementById('formError').textContent = 'Please upload at least one document file';
-    return;
-  }
   const formData = new FormData();
-  ['ticket_date','priority','raising_dept_id','raising_employee_id','complaint_category_id','location_id','ticket_description','details','assigned_to'].forEach(k => {
+  ['ticket_date','priority','complaint_category_id','location_id','ticket_description','details','assigned_to'].forEach(k => {
     if (fd.get(k)) formData.append(k, fd.get(k));
   });
   for (const f of imageFiles) formData.append('images', f);
@@ -451,20 +1147,27 @@ async function renderTicketDetail(id) {
     const fileAttachments = ticket.attachments.filter(a => a.file_type === 'file');
 
     const imgs = imageAttachments.map(a =>
-      `<a href="/${a.file_path}" target="_blank"><img src="/${a.file_path}" alt="${esc(a.file_name)}" /></a>`
+      `<a href="#" onclick="openAttachment(${a.id}); return false;" class="att-image-link">
+        <img class="att-thumb" data-att-id="${a.id}" alt="${esc(a.file_name)}" />
+      </a>`
     ).join('');
 
     const docs = fileAttachments.map(a =>
-      `<a href="/${a.file_path}" target="_blank" class="btn" style="margin-right:8px;margin-bottom:8px;display:inline-block">${esc(a.file_name)}</a>`
+      `<a href="#" onclick="openAttachment(${a.id}); return false;" class="btn" style="margin-right:8px;margin-bottom:8px;display:inline-block">${esc(a.file_name)}</a>`
     ).join('');
 
-    const history = ticket.history.map(h =>
-      `<div class="history-item"><strong>${esc(h.action)}</strong> — ${esc(h.remarks || '')}
-        <div class="time">${new Date(h.created_at).toLocaleString()}</div></div>`
-    ).join('');
+    const history = ticket.history.map(h => {
+      const label = ACTION_LABELS[h.action] || h.action;
+      const by = h.action_by_name ? ` by ${esc(h.action_by_name)}` : '';
+      return `<div class="history-item"><strong>${esc(label)}</strong>${by}
+        <div class="history-remarks">${esc(h.remarks || '')}</div>
+        <div class="time">${new Date(h.created_at).toLocaleString()}</div></div>`;
+    }).join('');
 
     const isClosed = ticket.status === 'closed';
-    const empOpts = employees.map(e => `<option value="${e.emp_id}">${esc(e.name)}</option>`).join('');
+    const canEdit = canModifyTicket(ticket);
+    const user = getAuthUser();
+    const isAssignee = user && Number(ticket.assigned_to) === Number(user.emp_id);
 
     main.innerHTML = `
       <div class="header-row">
@@ -490,26 +1193,33 @@ async function renderTicketDetail(id) {
         ${docs ? `<div class="form-group"><label>Documents</label><div>${docs}</div></div>` : ''}
         ${imgs ? `<div class="form-group"><label>Pictures</label><div class="image-preview">${imgs}</div></div>` : ''}
       </div>
-      ${!isClosed ? `
+      ${canEdit ? `
       <div class="card">
-        <div class="form-group"><label>Action By (Your Employee)</label>
-          <select id="actionBy"><option value="">-- Select --</option>${empOpts}</select></div>
+        <h3 style="margin-bottom:12px;font-size:16px">Ticket Actions${isAssignee ? ' <span class="badge badge-in_progress">Assigned to you</span>' : ''}</h3>
         <button class="btn btn-primary" onclick="openModal('update',${id})">Update Ticket</button>
-        <button class="btn btn-warning" onclick="openModal('forward',${id})">Forward Ticket</button>
+        <button class="btn btn-warning" onclick="openModal('forward',${id})">Reassign Ticket</button>
         <button class="btn btn-success" onclick="openModal('close',${id})">Close Ticket</button>
       </div>` : ''}
-      ${history ? `<div class="card"><h3 style="margin-bottom:12px;font-size:16px">Ticket History</h3>${history}</div>` : ''}`;
+      ${!isClosed ? `
+      <div class="card">
+        <h3 style="margin-bottom:12px;font-size:16px">Add Comment</h3>
+        <div class="form-group" style="margin-bottom:10px">
+          <label>Comment *</label>
+          <textarea id="ticketComment" placeholder="Enter your comment..." required></textarea>
+        </div>
+        <div id="commentError" class="error"></div>
+        <button type="button" class="btn btn-primary" onclick="submitTicketComment(${id})">Add Comment</button>
+      </div>` : ''}
+      ${history ? `<div class="card"><h3 style="margin-bottom:12px;font-size:16px">Comments &amp; History</h3>${history}</div>` : ''}`;
 
     window._ticketData = { ticket, employees, categories, locations };
+    main.querySelectorAll('img.att-thumb').forEach((img) => loadAttachmentPreview(img));
   } catch (e) {
     main.innerHTML = `<div class="error">${esc(e.message)}</div>`;
   }
 }
 
 window.openModal = (type, ticketId) => {
-  const actionBy = document.getElementById('actionBy').value;
-  if (!actionBy) { alert('Please select Action By employee'); return; }
-
   const { ticket, employees, categories, locations } = window._ticketData;
   let body = '';
 
@@ -540,7 +1250,7 @@ window.openModal = (type, ticketId) => {
   }
 
   body += `
-    <div class="form-group" style="margin-bottom:10px"><label>Remarks</label><textarea id="m_remarks"></textarea></div>`;
+    <div class="form-group" style="margin-bottom:10px"><label>Comment *</label><textarea id="m_remarks" required placeholder="Enter a comment explaining this action..."></textarea></div>`;
 
   if (type === 'update') {
     body += `
@@ -554,7 +1264,7 @@ window.openModal = (type, ticketId) => {
   body += `
     <div id="modalError" class="error"></div>`;
 
-  const titles = { update: 'Update Ticket', forward: 'Forward Ticket', close: 'Close Ticket' };
+  const titles = { update: 'Update Ticket', forward: 'Reassign Ticket', close: 'Close Ticket' };
   const overlay = document.createElement('div');
   overlay.className = 'modal-overlay';
   overlay.innerHTML = `<div class="modal">
@@ -570,9 +1280,12 @@ window.openModal = (type, ticketId) => {
 
   document.getElementById('modalSubmit').onclick = async () => {
     const fd = new FormData();
-    fd.append('action_by', actionBy);
-    const remarks = document.getElementById('m_remarks').value;
-    if (remarks) fd.append('remarks', remarks);
+    const remarks = document.getElementById('m_remarks').value.trim();
+    if (!remarks) {
+      document.getElementById('modalError').textContent = 'Comment is required';
+      return;
+    }
+    fd.append('remarks', remarks);
     const imgs = document.getElementById('m_images').files;
     for (const f of imgs) fd.append('images', f);
 
@@ -591,12 +1304,22 @@ window.openModal = (type, ticketId) => {
         if (!fwd) { document.getElementById('modalError').textContent = 'Select employee'; return; }
         fd.append('forward_to', fwd);
         await postForm(`/tickets/${ticketId}/forward`, fd);
+        closeModal();
+        const user = getAuthUser();
+        if (Number(fwd) !== Number(user?.emp_id)) {
+          setFlash('Ticket reassigned successfully');
+          navigate('#/tickets');
+          return;
+        }
       } else {
         await postForm(`/tickets/${ticketId}/close`, fd);
       }
       closeModal();
-      renderTicketDetail(ticketId);
-      document.getElementById('ticketMsg').innerHTML = '<div class="success">Action completed successfully</div>';
+      await renderTicketDetail(ticketId);
+      const msgEl = document.getElementById('ticketMsg');
+      if (msgEl) {
+        msgEl.innerHTML = '<div class="success">Action completed successfully</div>';
+      }
     } catch (err) {
       document.getElementById('modalError').textContent = err.message;
     }
@@ -607,24 +1330,169 @@ window.closeModal = () => {
   if (ticketModal) { ticketModal.remove(); ticketModal = null; }
 };
 
+window.submitTicketComment = async (ticketId) => {
+  const commentEl = document.getElementById('ticketComment');
+  const errEl = document.getElementById('commentError');
+  errEl.textContent = '';
+  const remarks = commentEl.value.trim();
+  if (!remarks) {
+    errEl.textContent = 'Comment is required';
+    return;
+  }
+  try {
+    await request(`/tickets/${ticketId}/comments`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ remarks }),
+    });
+    commentEl.value = '';
+    renderTicketDetail(ticketId);
+    document.getElementById('ticketMsg').innerHTML = '<div class="success">Comment added successfully</div>';
+  } catch (err) {
+    errEl.textContent = err.message;
+  }
+};
+
+// --- Role Permissions Admin ---
+const STAFF_PERM_LABELS = [
+  { key: 'can_create', label: 'Create Tickets' },
+  { key: 'can_view', label: 'View Tickets' },
+  { key: 'can_edit', label: 'Edit / Forward / Close' },
+];
+
+const ADMIN_PERM_LABELS = [
+  { key: 'can_view_all', label: 'View All Tickets' },
+  { key: 'can_manage_permissions', label: 'Manage Permissions' },
+  { key: 'can_manage_masters', label: 'Manage Masters' },
+];
+
+const PERM_LABELS = [...STAFF_PERM_LABELS, ...ADMIN_PERM_LABELS];
+
+function isAdminRoleName(name) {
+  return String(name || '').toLowerCase() === 'admin';
+}
+
+let permState = { rows: [], message: '', error: '' };
+
+async function renderPermissionsAdmin() {
+  if (!can('can_manage_permissions')) {
+    main.innerHTML = '<h2 class="page-title">Role Permissions</h2><div class="error">You do not have permission to manage role permissions.</div>';
+    return;
+  }
+
+  main.innerHTML = '<h2 class="page-title">Role Permissions</h2><p>Loading...</p>';
+  try {
+    permState.rows = await request('/permissions/');
+    renderPermissionsTable();
+  } catch (e) {
+    main.innerHTML = `<h2 class="page-title">Role Permissions</h2><div class="error">${esc(e.message)}</div>`;
+  }
+}
+
+function renderPermissionsTable() {
+  const header = PERM_LABELS.map(p => `<th>${p.label}</th>`).join('');
+  const body = permState.rows.map(row => {
+    const isAdmin = row.is_admin || isAdminRoleName(row.role_name);
+    const checks = PERM_LABELS.map(p => {
+      const checked = isAdmin ? true : !!row.permissions[p.key];
+      const disabled = isAdmin || ADMIN_PERM_LABELS.some(a => a.key === p.key);
+      return `<td class="perm-cell"><input type="checkbox" data-role="${row.role_id}" data-perm="${p.key}" ${checked ? 'checked' : ''} ${disabled ? 'disabled' : ''} /></td>`;
+    }).join('');
+    const tag = isAdmin ? ' <span class="badge badge-closed">Full Access</span>' : '';
+    return `<tr><td><strong>${esc(row.role_name)}</strong>${tag}</td>${checks}</tr>`;
+  }).join('');
+
+  main.innerHTML = `
+    <h2 class="page-title">Role Permissions</h2>
+    <p class="perm-hint">Only the <strong>Admin</strong> role has full system access. Each employee can create scheduled jobs and view, edit, and close only the jobs they created.</p>
+    ${permState.message ? `<div class="success">${esc(permState.message)}</div>` : ''}
+    ${permState.error ? `<div class="error">${esc(permState.error)}</div>` : ''}
+    <div class="card perm-table-wrap">
+      <table class="perm-table">
+        <thead><tr><th>Role</th>${header}</tr></thead>
+        <tbody>${body}</tbody>
+      </table>
+    </div>
+    <button type="button" class="btn btn-primary" onclick="saveAllPermissions()">Save Permissions</button>`;
+}
+
+window.saveAllPermissions = async () => {
+  permState.message = '';
+  permState.error = '';
+  try {
+    for (const row of permState.rows) {
+      if (row.is_admin || isAdminRoleName(row.role_name)) continue;
+      const payload = {};
+      STAFF_PERM_LABELS.forEach(p => {
+        const el = document.querySelector(`input[data-role="${row.role_id}"][data-perm="${p.key}"]`);
+        payload[p.key] = el ? el.checked : false;
+      });
+      const updated = await request(`/permissions/${row.role_id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      row.permissions = updated.permissions;
+    }
+    await refreshAuthUser();
+    permState.message = 'Permissions saved successfully';
+    renderPermissionsTable();
+    renderSidebar();
+  } catch (e) {
+    permState.error = e.message;
+    renderPermissionsTable();
+  }
+};
+
 // --- Route handler ---
 async function route() {
-  renderSidebar();
-  masterState = { editId: null, form: {}, message: '', error: '' };
-  const hash = location.hash || '#/tickets';
+  const hash = location.hash || '#/dashboard';
 
-  if (hash === '#/tickets') return renderTicketList();
+  if (!getToken()) {
+    if (hash !== '#/login') location.hash = '#/login';
+    return renderLogin();
+  }
+
+  if (hash === '#/login') {
+    navigate('#/dashboard');
+    return;
+  }
+
+  await refreshAuthUser();
+  renderSidebar();
+  renderHeader();
+  masterState = { editId: null, form: {}, message: '', error: '' };
+
+  if (hash === '#/dashboard') return renderDashboard();
+  if (hash === '#/schedule-jobs') return renderScheduleJobs();
+  if (hash === '#/tickets/department') return renderTicketList('department');
+  if (hash === '#/tickets') return renderTicketList('my');
   if (hash === '#/tickets/new') return renderNewTicket();
   if (hash.startsWith('#/tickets/')) {
     const id = hash.split('/')[2];
-    if (id && id !== 'new') return renderTicketDetail(id);
+    if (id && id !== 'new' && id !== 'department') return renderTicketDetail(id);
   }
-  if (hash === '#/masters/employees') return renderEmployees();
+  if (hash === '#/admin/permissions') return renderPermissionsAdmin();
+  if (hash === '#/masters/employees') {
+    if (!can('can_manage_masters')) {
+      main.innerHTML = '<div class="error">You do not have permission to access master data.</div>';
+      return;
+    }
+    return renderEmployees();
+  }
   if (hash.startsWith('#/masters/')) {
+    if (!can('can_manage_masters')) {
+      main.innerHTML = '<div class="error">You do not have permission to access master data.</div>';
+      return;
+    }
     const type = hash.replace('#/masters/', '');
+    if (type === 'roles' && !isAdminUser()) {
+      main.innerHTML = '<div class="error">Only Admin users can access the Roles master.</div>';
+      return;
+    }
     if (MASTERS[type]) return renderMaster(type);
   }
-  renderTicketList();
+  renderDashboard();
 }
 
 window.addEventListener('hashchange', route);
