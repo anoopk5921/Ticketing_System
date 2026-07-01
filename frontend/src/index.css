@@ -31,7 +31,9 @@ body {
 }
 
 .sidebar a {
-  display: block;
+  display: flex;
+  align-items: center;
+  gap: 10px;
   padding: 10px 20px;
   color: rgba(255,255,255,0.8);
   text-decoration: none;
@@ -42,6 +44,34 @@ body {
 .sidebar a.active {
   background: rgba(255,255,255,0.1);
   color: #fff;
+}
+
+.sidebar a.active .nav-icon {
+  opacity: 1;
+}
+
+.nav-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  flex-shrink: 0;
+  opacity: 0.85;
+}
+
+.nav-icon svg {
+  width: 18px;
+  height: 18px;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 1.75;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.nav-label {
+  line-height: 1.2;
 }
 
 .sidebar .section-title {
@@ -340,4 +370,15 @@ table tr:hover {
 .modal-actions {
   margin-top: 16px;
   text-align: right;
+}
+
+.form-hint {
+  color: #666;
+  font-size: 13px;
+  margin: 0 0 14px;
+}
+
+.req-star {
+  color: #c62828;
+  font-weight: 700;
 }

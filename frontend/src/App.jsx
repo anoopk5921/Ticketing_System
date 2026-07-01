@@ -14,6 +14,8 @@ import { isAuthenticated, getAuthUser } from './auth';
 
 import { logout } from './api';
 
+import NavIcon from './components/NavIcon';
+
 
 
 function ProtectedLayout({ children }) {
@@ -52,23 +54,44 @@ function ProtectedLayout({ children }) {
 
         <div className="section-title">Tickets</div>
 
-        <NavLink to="/tickets" className={({ isActive }) => isActive ? 'active' : ''}>All Tickets</NavLink>
+        <NavLink to="/tickets" className={({ isActive }) => isActive ? 'active' : ''}>
+          <NavIcon to="/tickets" />
+          <span className="nav-label">All Tickets</span>
+        </NavLink>
 
-        <NavLink to="/tickets/new" className={({ isActive }) => isActive ? 'active' : ''}>New Ticket</NavLink>
+        <NavLink to="/tickets/new" className={({ isActive }) => isActive ? 'active' : ''}>
+          <NavIcon to="/tickets/new" />
+          <span className="nav-label">New Ticket</span>
+        </NavLink>
 
 
 
         <div className="section-title">Masters</div>
 
-        <NavLink to="/masters/departments" className={({ isActive }) => isActive ? 'active' : ''}>Departments</NavLink>
+        <NavLink to="/masters/departments" className={({ isActive }) => isActive ? 'active' : ''}>
+          <NavIcon to="/masters/departments" />
+          <span className="nav-label">Departments</span>
+        </NavLink>
 
-        <NavLink to="/masters/roles" className={({ isActive }) => isActive ? 'active' : ''}>Roles</NavLink>
+        <NavLink to="/masters/roles" className={({ isActive }) => isActive ? 'active' : ''}>
+          <NavIcon to="/masters/roles" />
+          <span className="nav-label">Roles</span>
+        </NavLink>
 
-        <NavLink to="/masters/employees" className={({ isActive }) => isActive ? 'active' : ''}>Employees</NavLink>
+        <NavLink to="/masters/employees" className={({ isActive }) => isActive ? 'active' : ''}>
+          <NavIcon to="/masters/employees" />
+          <span className="nav-label">Employees</span>
+        </NavLink>
 
-        <NavLink to="/masters/categories" className={({ isActive }) => isActive ? 'active' : ''}>Categories</NavLink>
+        <NavLink to="/masters/categories" className={({ isActive }) => isActive ? 'active' : ''}>
+          <NavIcon to="/masters/categories" />
+          <span className="nav-label">Categories</span>
+        </NavLink>
 
-        <NavLink to="/masters/locations" className={({ isActive }) => isActive ? 'active' : ''}>Locations</NavLink>
+        <NavLink to="/masters/locations" className={({ isActive }) => isActive ? 'active' : ''}>
+          <NavIcon to="/masters/locations" />
+          <span className="nav-label">Locations</span>
+        </NavLink>
 
       </nav>
 

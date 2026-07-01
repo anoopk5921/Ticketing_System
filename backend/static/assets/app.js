@@ -175,7 +175,17 @@ function canModifyTicket(ticket) {
   if (!user) return false;
   if (isAdminUser()) return true;
   if (Number(ticket.assigned_to) === Number(user.emp_id)) return true;
+  if (Number(ticket.raising_employee_id) === Number(user.emp_id)) return true;
   if (can('can_edit')) return true;
+  return false;
+}
+
+function canDeleteTicket(ticket) {
+  if (!ticket || ticket.status === 'closed') return false;
+  const user = getAuthUser();
+  if (!user) return false;
+  if (isAdminUser()) return true;
+  if (Number(ticket.raising_employee_id) === Number(user.emp_id)) return true;
   return false;
 }
 
@@ -202,6 +212,25 @@ async function refreshAuthUser() {
     // ignore
   }
   return getAuthUser();
+}
+
+const NAV_ICONS = {
+  '#/dashboard': '<rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/>',
+  '#/tickets': '<path d="M4 6h16v12H4z"/><path d="M8 6V4h8v2"/><path d="M8 11h8"/><path d="M8 15h5"/>',
+  '#/tickets/new': '<circle cx="12" cy="12" r="9"/><path d="M12 8v8"/><path d="M8 12h8"/>',
+  '#/tickets/department': '<path d="M3 21h18"/><path d="M6 21V7l6-4 6 4v14"/><path d="M10 21v-6h4v6"/>',
+  '#/schedule-jobs': '<rect x="3" y="5" width="18" height="16" rx="2"/><path d="M16 3v4"/><path d="M8 3v4"/><path d="M3 11h18"/><path d="M12 15v3"/>',
+  '#/admin/permissions': '<path d="M12 3l7 4v5c0 5-3 8-7 9-4-1-7-4-7-9V7z"/><path d="M9 12l2 2 4-4"/>',
+  '#/masters/departments': '<path d="M3 21h18"/><path d="M6 21V9l6-3 6 3v12"/><path d="M10 13h4v8"/>',
+  '#/masters/roles': '<circle cx="12" cy="8" r="4"/><path d="M6 21v-1a6 6 0 0 1 12 0v1"/>',
+  '#/masters/employees': '<circle cx="9" cy="8" r="3"/><path d="M4 21v-1a5 5 0 0 1 5-5"/><circle cx="17" cy="10" r="2.5"/><path d="M14 21v-1a4 4 0 0 1 4-3"/>',
+  '#/masters/categories': '<path d="M4 7h7v7H4z"/><path d="M13 7h7v4h-7z"/><path d="M13 13h7v7h-7z"/><path d="M4 16h7v4H4z"/>',
+  '#/masters/locations': '<path d="M12 21s6-5.2 6-10a6 6 0 1 0-12 0c0 4.8 6 10 6 10z"/><circle cx="12" cy="11" r="2"/>',
+};
+
+function navIconSvg(hash) {
+  const paths = NAV_ICONS[hash] || NAV_ICONS['#/tickets'];
+  return `<span class="nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24">${paths}</svg></span>`;
 }
 
 function getNavItems() {
@@ -247,7 +276,7 @@ function renderSidebar() {
   sidebar.innerHTML = '<h1>Ticketing System</h1>' + getNavItems().map(item => {
     if (item.section) return `<div class="section-title">${item.section}</div>`;
     const active = current === item.hash ? 'active' : '';
-    return `<a class="${active}" href="${item.hash}">${item.label}</a>`;
+    return `<a class="nav-link ${active}" href="${item.hash}">${navIconSvg(item.hash)}<span class="nav-label">${esc(item.label)}</span></a>`;
   }).join('');
 }
 
@@ -346,7 +375,7 @@ const MASTERS = {
   departments: {
     title: 'Department Master',
     idKey: 'dept_id',
-    fields: [{ key: 'description', label: 'Description' }],
+    fields: [{ key: 'description', label: 'Department', required: true }],
     list: () => request('/departments/'),
     create: (d) => request('/departments/', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(d) }),
     update: (id, d) => request(`/departments/${id}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(d) }),
@@ -355,7 +384,7 @@ const MASTERS = {
   roles: {
     title: 'Role Master',
     idKey: 'role_id',
-    fields: [{ key: 'role_name', label: 'Role Name' }],
+    fields: [{ key: 'role_name', label: 'Role Name', required: true }],
     list: () => request('/roles/'),
     create: (d) => request('/roles/', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(d) }),
     update: (id, d) => request(`/roles/${id}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(d) }),
@@ -364,7 +393,7 @@ const MASTERS = {
   categories: {
     title: 'Complaint Category Master',
     idKey: 'id',
-    fields: [{ key: 'category_description', label: 'Category Description' }],
+    fields: [{ key: 'category_description', label: 'Category Name', required: true }],
     list: () => request('/categories/'),
     create: (d) => request('/categories/', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(d) }),
     update: (id, d) => request(`/categories/${id}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(d) }),
@@ -373,7 +402,7 @@ const MASTERS = {
   locations: {
     title: 'Location Master',
     idKey: 'id',
-    fields: [{ key: 'location_name', label: 'Location Name' }],
+    fields: [{ key: 'location_name', label: 'Location Name', required: true }],
     list: () => request('/locations/'),
     create: (d) => request('/locations/', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(d) }),
     update: (id, d) => request(`/locations/${id}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(d) }),
@@ -388,12 +417,14 @@ async function renderMaster(type) {
   if (!cfg) return;
   const items = await cfg.list();
 
-  const formFields = cfg.fields.map(f =>
-    `<div class="form-group">
-      <label>${f.label}</label>
-      <input name="${f.key}" value="${esc(masterState.form[f.key] || '')}" required />
-    </div>`
-  ).join('');
+  const formFields = cfg.fields.map(f => {
+    const isRequired = f.required !== false;
+    const labelHtml = isRequired ? reqLabel(f.label) : esc(f.label);
+    return `<div class="form-group">
+      <label>${labelHtml}</label>
+      <input name="${f.key}" value="${esc(masterState.form[f.key] || '')}" ${isRequired ? 'required' : ''} />
+    </div>`;
+  }).join('');
 
   const tableRows = items.map(item => {
     const cells = cfg.fields.map(f => `<td>${esc(item[f.key])}</td>`).join('');
@@ -463,6 +494,15 @@ window.saveMaster = async (e, type) => {
   const fd = new FormData(e.target);
   const data = {};
   cfg.fields.forEach(f => { data[f.key] = fd.get(f.key); });
+  for (const f of cfg.fields) {
+    if (f.required !== false && !String(data[f.key] || '').trim()) {
+      masterState.error = `${f.label} is required`;
+      masterState.message = '';
+      renderMaster(type);
+      return;
+    }
+    if (typeof data[f.key] === 'string') data[f.key] = data[f.key].trim();
+  }
   try {
     if (masterState.editId) {
       await cfg.update(masterState.editId, data);
@@ -510,14 +550,14 @@ async function renderEmployees() {
     <div class="card">
       <form id="empForm" onsubmit="saveEmployee(event)">
         <div class="form-row">
-          <div class="form-group"><label>Name</label><input name="name" value="${esc(f.name || '')}" required /></div>
-          <div class="form-group"><label>User ID</label><input name="user_id" value="${esc(f.user_id || '')}" required /></div>
-          <div class="form-group"><label>Password</label><input type="password" name="password" placeholder="${pwdHint}" ${masterState.editId ? '' : 'required'} /></div>
+          <div class="form-group"><label>${reqLabel('Name')}</label><input name="name" value="${esc(f.name || '')}" required /></div>
+          <div class="form-group"><label>${reqLabel('User ID')}</label><input name="user_id" value="${esc(f.user_id || '')}" required /></div>
+          <div class="form-group"><label>${reqLabel('Password')}</label><input type="password" name="password" placeholder="${pwdHint}" ${masterState.editId ? '' : 'required'} /></div>
         </div>
         <div class="form-row">
-          <div class="form-group"><label>Department</label>
+          <div class="form-group"><label>${reqLabel('Department')}</label>
             <select name="dept_id" required><option value="">-- Select --</option>${deptOpts}</select></div>
-          <div class="form-group"><label>Role</label>
+          <div class="form-group"><label>${reqLabel('Role')}</label>
             <select name="role_id" required><option value="">-- Select --</option>${roleOpts}</select></div>
         </div>
         ${masterState.error ? `<div class="error">${esc(masterState.error)}</div>` : ''}
@@ -554,18 +594,20 @@ window.deleteEmployee = async (id) => {
 window.saveEmployee = async (e) => {
   e.preventDefault();
   const fd = new FormData(e.target);
-  const data = {
-    name: fd.get('name'),
-    user_id: fd.get('user_id'),
-    dept_id: Number(fd.get('dept_id')),
-    role_id: Number(fd.get('role_id')),
-  };
-  const pwd = fd.get('password');
+  const name = String(fd.get('name') || '').trim();
+  const user_id = String(fd.get('user_id') || '').trim();
+  const dept_id = Number(fd.get('dept_id'));
+  const role_id = Number(fd.get('role_id'));
+  const pwd = String(fd.get('password') || '').trim();
+
+  if (!name) { masterState.error = 'Name is required'; return renderEmployees(); }
+  if (!user_id) { masterState.error = 'User ID is required'; return renderEmployees(); }
+  if (!dept_id) { masterState.error = 'Department is required'; return renderEmployees(); }
+  if (!role_id) { masterState.error = 'Role is required'; return renderEmployees(); }
+  if (!masterState.editId && !pwd) { masterState.error = 'Password is required'; return renderEmployees(); }
+
+  const data = { name, user_id, dept_id, role_id };
   if (pwd) data.password = pwd;
-  else if (!masterState.editId) {
-    masterState.error = 'Password is required';
-    return renderEmployees();
-  }
   try {
     if (masterState.editId) {
       await request(`/employees/${masterState.editId}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data) });
@@ -693,16 +735,13 @@ async function renderDashboard() {
       <div class="card">
         <h3 class="dash-section-title">Created By Me</h3>
         ${renderDashboardTicketTable(data.my_work.created_by_me, 'You have not created any tickets.')}
-      </div>
-      <div class="card">
-        <h3 class="dash-section-title">My Completed Work</h3>
-        ${renderDashboardTicketTable(data.my_work.completed, 'No completed tickets in your work.')}
       </div>`;
 
     if (data.department_work) {
       html += `
       <div class="card dash-dept-card">
         <h3 class="dash-section-title">Department Work — ${esc(data.department_work.department_name || user?.department_name || 'Department')}</h3>
+        <p class="dash-period-hint">Showing department tickets for <strong>${esc(data.period?.label || '')}</strong>. Use the month navigation above to view previous months.</p>
         ${renderStatCards(data.department_work.summary)}
       </div>
       <div class="card">
@@ -716,10 +755,6 @@ async function renderDashboard() {
       <div class="card">
         <h3 class="dash-section-title">All Department Tickets</h3>
         ${renderDashboardTicketTable(data.department_work.tickets, 'No tickets in your department.')}
-      </div>
-      <div class="card">
-        <h3 class="dash-section-title">Department Completed Work</h3>
-        ${renderDashboardTicketTable(data.department_work.completed, 'No completed tickets in your department.')}
       </div>`;
     }
 
@@ -742,56 +777,153 @@ const DAY_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Frid
 let scheduleState = { editId: null, form: {}, message: '', error: '' };
 
 function scheduleTypeSummary(job) {
+  const time = job.run_time_display || job.run_time || '';
+  const atTime = time ? ` at ${time}` : '';
   switch (job.schedule_type) {
-    case 'once': return `Once on ${job.run_date || '-'}`;
-    case 'daily': return 'Every day';
-    case 'weekly': return `Weekly on ${DAY_NAMES[job.day_of_week] || '-'}`;
-    case 'monthly': return `Monthly on day ${job.day_of_month || '-'}`;
+    case 'once': return `Once on ${job.run_date || '-'}${atTime}`;
+    case 'daily': return `Every day${atTime} until ${job.end_date || '-'}`;
+    case 'weekly': return `Weekly on ${DAY_NAMES[job.day_of_week] || '-'}${atTime} until ${job.end_date || '-'}`;
+    case 'monthly': return `Monthly on day ${job.day_of_month || '-'}${atTime} until ${job.end_date || '-'}`;
     case 'periodic':
-      return `Every ${job.interval_days} day(s)${job.end_date ? ` until ${job.end_date}` : ''}`;
+      return `Every ${job.interval_days} day(s)${atTime} until ${job.end_date || '-'}`;
     default: return job.schedule_type;
   }
 }
 
-function renderScheduleTypeFields(form = {}) {
-  const type = form.schedule_type || 'once';
-  const today = new Date().toISOString().split('T')[0];
+function todayStr() {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
+function addDaysStr(dateStr, days) {
+  const d = new Date(`${String(dateStr).split('T')[0]}T12:00:00`);
+  d.setDate(d.getDate() + days);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
+function currentTime12h() {
+  const now = new Date();
+  let h = now.getHours();
+  const m = String(now.getMinutes()).padStart(2, '0');
+  const ampm = h >= 12 ? 'PM' : 'AM';
+  h = h % 12;
+  if (h === 0) h = 12;
+  return `${h}:${m} ${ampm}`;
+}
+
+function formatTimeForInput(timeValue) {
+  const parts = String(timeValue || '09:00:00').split(':');
+  let h = parseInt(parts[0], 10);
+  const m = parts[1] || '00';
+  const ampm = h >= 12 ? 'PM' : 'AM';
+  h = h % 12;
+  if (h === 0) h = 12;
+  return `${h}:${m} ${ampm}`;
+}
+
+function getScheduleStartFromForm(form, type) {
+  const today = todayStr();
+  if (type === 'once') return String(form.run_date || today).split('T')[0];
+  return String(form.start_date || today).split('T')[0];
+}
+
+function renderStartEndDateRow(form, type) {
+  const today = todayStr();
+  const start = getScheduleStartFromForm(form, type);
+  const defaultEnd = addDaysStr(start, 1);
+  const endVal = form.end_date ? String(form.end_date).split('T')[0] : defaultEnd;
+  const dateChange = 'onchange="syncScheduleEndDate(true)"';
+  const runVal = String(form.run_date || today).split('T')[0];
+  const startVal = String(form.start_date || today).split('T')[0];
+
   return `
-    <div class="form-row schedule-fields schedule-once" style="display:${type === 'once' ? 'flex' : 'none'}">
-      <div class="form-group"><label>Run Date</label>
-        <input type="date" name="run_date" value="${esc(form.run_date || today)}" /></div>
-    </div>
-    <div class="form-row schedule-fields schedule-daily" style="display:${type === 'daily' ? 'flex' : 'none'}">
-      <div class="form-group"><label>Start From</label>
-        <input type="date" name="start_date" value="${esc(form.start_date || today)}" /></div>
-    </div>
-    <div class="form-row schedule-fields schedule-weekly" style="display:${type === 'weekly' ? 'flex' : 'none'}">
-      <div class="form-group"><label>Day of Week</label>
-        <select name="day_of_week">
-          ${DAY_NAMES.map((d, i) => `<option value="${i}" ${Number(form.day_of_week) === i ? 'selected' : ''}>${d}</option>`).join('')}
-        </select></div>
-      <div class="form-group"><label>Start From</label>
-        <input type="date" name="start_date" value="${esc(form.start_date || today)}" /></div>
-    </div>
-    <div class="form-row schedule-fields schedule-monthly" style="display:${type === 'monthly' ? 'flex' : 'none'}">
-      <div class="form-group"><label>Day of Month</label>
-        <input type="number" name="day_of_month" min="1" max="31" value="${esc(form.day_of_month || 1)}" /></div>
-    </div>
-    <div class="form-row schedule-fields schedule-periodic" style="display:${type === 'periodic' ? 'flex' : 'none'}">
-      <div class="form-group"><label>Every (days)</label>
-        <input type="number" name="interval_days" min="1" value="${esc(form.interval_days || 7)}" /></div>
-      <div class="form-group"><label>Start Date</label>
-        <input type="date" name="start_date" value="${esc(form.start_date || today)}" /></div>
-      <div class="form-group"><label>End Date (optional)</label>
-        <input type="date" name="end_date" value="${esc(form.end_date || '')}" /></div>
+    <div class="form-row schedule-date-row">
+      <div class="form-group schedule-run-date-field" style="display:${type === 'once' ? 'block' : 'none'}">
+        <label>Run Date *</label>
+        <input type="date" name="run_date" value="${esc(runVal)}" ${dateChange} />
+      </div>
+      <div class="form-group schedule-start-date-field" style="display:${type === 'once' ? 'none' : 'block'}">
+        <label>Start From *</label>
+        <input type="date" name="start_date" value="${esc(startVal)}" ${dateChange} />
+      </div>
+      <div class="form-group">
+        <label>End Date *</label>
+        <input type="date" name="end_date" value="${esc(endVal)}" min="${esc(defaultEnd)}" required />
+      </div>
     </div>`;
 }
+
+function renderScheduleCommonFields(form = {}) {
+  const timeText = form.run_time_display
+    || (form.run_time ? formatTimeForInput(form.run_time) : currentTime12h());
+
+  return `
+    <div class="form-row">
+      <div class="form-group schedule-time-field"><label>Ticket Creation Time *</label>
+        <input type="text" name="run_time" value="${esc(timeText)}" placeholder="9:00 AM" required />
+        <small class="field-hint">e.g. 9:00 AM or 2:30 PM</small>
+      </div>
+    </div>`;
+}
+
+function renderScheduleTypeFields(form = {}) {
+  const type = form.schedule_type || 'once';
+
+  return `
+    <div class="schedule-fields schedule-weekly" style="display:${type === 'weekly' ? 'block' : 'none'};width:100%">
+      <div class="form-row">
+        <div class="form-group schedule-day-field"><label>Day of Week</label>
+          <select name="day_of_week">
+            ${DAY_NAMES.map((d, i) => `<option value="${i}" ${Number(form.day_of_week) === i ? 'selected' : ''}>${d}</option>`).join('')}
+          </select></div>
+      </div>
+    </div>
+    <div class="schedule-fields schedule-monthly" style="display:${type === 'monthly' ? 'block' : 'none'};width:100%">
+      <div class="form-row">
+        <div class="form-group schedule-day-field"><label>Day of Month</label>
+          <input type="number" name="day_of_month" min="1" max="31" value="${esc(form.day_of_month || 1)}" /></div>
+      </div>
+    </div>
+    <div class="schedule-fields schedule-periodic" style="display:${type === 'periodic' ? 'block' : 'none'};width:100%">
+      <div class="form-row">
+        <div class="form-group schedule-day-field"><label>Every (days)</label>
+          <input type="number" name="interval_days" min="1" value="${esc(form.interval_days || 7)}" /></div>
+      </div>
+    </div>
+    <div class="schedule-date-section" style="width:100%">
+      ${renderStartEndDateRow(form, type)}
+    </div>`;
+}
+
+window.syncScheduleEndDate = (updateValue) => {
+  const form = document.getElementById('scheduleJobForm');
+  if (!form) return;
+  const type = form.querySelector('[name=schedule_type]')?.value || 'once';
+  const startInput = type === 'once'
+    ? form.querySelector('[name=run_date]')
+    : form.querySelector('[name=start_date]');
+  const endInput = form.querySelector('[name=end_date]');
+  if (!endInput) return;
+  const start = startInput?.value || todayStr();
+  const nextDay = addDaysStr(start, 1);
+  endInput.min = nextDay;
+  if (updateValue) {
+    endInput.value = nextDay;
+  }
+};
 
 window.onScheduleTypeChange = (sel) => {
   const type = sel.value;
   document.querySelectorAll('.schedule-fields').forEach((el) => { el.style.display = 'none'; });
   const target = document.querySelector(`.schedule-${type}`);
-  if (target) target.style.display = 'flex';
+  if (target) target.style.display = 'block';
+
+  const runDateField = document.querySelector('.schedule-run-date-field');
+  const startDateField = document.querySelector('.schedule-start-date-field');
+  if (runDateField) runDateField.style.display = type === 'once' ? 'block' : 'none';
+  if (startDateField) startDateField.style.display = type === 'once' ? 'none' : 'block';
+
+  syncScheduleEndDate(true);
 };
 
 async function renderScheduleJobs() {
@@ -843,6 +975,7 @@ async function renderScheduleJobs() {
             </select></div>
         </div>
         ${renderScheduleTypeFields(form)}
+        ${renderScheduleCommonFields(form)}
         <div class="form-row">
           <div class="form-group"><label>Complaint Category</label>
             <select name="complaint_category_id" required>
@@ -893,6 +1026,7 @@ async function renderScheduleJobs() {
         <tbody>${rows || '<tr><td colspan="10" style="text-align:center;color:#888">No scheduled jobs yet</td></tr>'}</tbody>
       </table></div>
     </div>`;
+  syncScheduleEndDate(false);
 }
 
 window.editScheduleJob = async (id) => {
@@ -971,9 +1105,9 @@ window.saveScheduleJob = async (e) => {
   const data = {};
   ['job_name', 'schedule_type', 'run_date', 'start_date', 'end_date', 'day_of_week', 'day_of_month',
     'interval_days', 'complaint_category_id', 'location_id', 'ticket_description', 'details',
-    'assigned_to', 'priority'].forEach((k) => {
+    'assigned_to', 'priority', 'run_time'].forEach((k) => {
     const v = fd.get(k);
-    if (v !== null && v !== '') data[k] = v;
+    if (v !== null && v !== '') data[k] = String(v).trim();
   });
   if (scheduleState.editId) {
     data.is_active = fd.get('is_active') === '1';
@@ -1060,6 +1194,31 @@ async function renderTicketList(scope) {
 }
 
 // --- New Ticket ---
+const NEW_TICKET_REQUIRED = [
+  { name: 'ticket_date', label: 'Date' },
+  { name: 'priority', label: 'Priority' },
+  { name: 'complaint_category_id', label: 'Complaint Category' },
+  { name: 'location_id', label: 'Location' },
+  { name: 'ticket_description', label: 'Ticket Description' },
+  { name: 'assigned_to', label: 'Assigned To' },
+];
+
+function reqLabel(text) {
+  return `${esc(text)} <span class="req-star">*</span>`;
+}
+
+function validateNewTicketForm(form) {
+  const missing = [];
+  for (const field of NEW_TICKET_REQUIRED) {
+    const el = form.querySelector(`[name="${field.name}"]`);
+    const val = el?.value;
+    if (!val || (field.name === 'ticket_description' && !String(val).trim())) {
+      missing.push(field.label);
+    }
+  }
+  return missing;
+}
+
 async function renderNewTicket() {
   if (!can('can_create')) {
     main.innerHTML = '<h2 class="page-title">Create New Ticket</h2><div class="error">You do not have permission to create tickets.</div>';
@@ -1073,32 +1232,34 @@ async function renderNewTicket() {
   main.innerHTML = `
     <h2 class="page-title">Create New Ticket</h2>
     <div class="card">
-      <form id="newTicketForm" onsubmit="submitNewTicket(event)">
+      <form id="newTicketForm" onsubmit="submitNewTicket(event)" novalidate>
+        <p class="form-hint">Fields marked with <span class="req-star">*</span> are mandatory.</p>
         <div class="form-row">
-          <div class="form-group"><label>Date</label><input type="date" name="ticket_date" value="${today}" required /></div>
-          <div class="form-group"><label>Priority</label>
+          <div class="form-group"><label>${reqLabel('Date')}</label><input type="date" name="ticket_date" value="${today}" required /></div>
+          <div class="form-group"><label>${reqLabel('Priority')}</label>
             <select name="priority" required>
-              <option value="normal">Normal</option>
+              <option value="">-- Select --</option>
+              <option value="normal" selected>Normal</option>
               <option value="moderate">Moderate</option>
               <option value="urgent">Urgent</option>
               <option value="critical">Critical</option>
             </select></div>
         </div>
         <div class="form-row">
-          <div class="form-group"><label>Complaint Category</label>
+          <div class="form-group"><label>${reqLabel('Complaint Category')}</label>
             <select name="complaint_category_id" required>
               <option value="">-- Select --</option>
               ${categories.map(c => `<option value="${c.id}">${esc(c.category_description)}</option>`).join('')}
             </select></div>
-          <div class="form-group"><label>Location</label>
+          <div class="form-group"><label>${reqLabel('Location')}</label>
             <select name="location_id" required>
               <option value="">-- Select --</option>
               ${locations.map(l => `<option value="${l.id}">${esc(l.location_name)}</option>`).join('')}
             </select></div>
         </div>
         <div class="form-row">
-          <div class="form-group"><label>Ticket Description</label><input name="ticket_description" required /></div>
-          <div class="form-group"><label>Assigned To</label>
+          <div class="form-group"><label>${reqLabel('Ticket Description')}</label><input name="ticket_description" required maxlength="300" /></div>
+          <div class="form-group"><label>${reqLabel('Assigned To')}</label>
             <select name="assigned_to" required>
               <option value="">-- Select --</option>
               ${employees.map(e => `<option value="${e.emp_id}">${esc(e.name)}</option>`).join('')}
@@ -1116,20 +1277,32 @@ async function renderNewTicket() {
 
 window.submitNewTicket = async (e) => {
   e.preventDefault();
-  const fd = new FormData(e.target);
-  const imageFiles = e.target.querySelector('[name=images]').files;
-  const documentFiles = e.target.querySelector('[name=files]').files;
+  const form = e.target;
+  const errEl = document.getElementById('formError');
+  errEl.textContent = '';
+
+  const missing = validateNewTicketForm(form);
+  if (missing.length) {
+    errEl.textContent = `Please fill required fields: ${missing.join(', ')}`;
+    if (!form.checkValidity()) form.reportValidity();
+    return;
+  }
+
+  const fd = new FormData(form);
+  const imageFiles = form.querySelector('[name=images]').files;
+  const documentFiles = form.querySelector('[name=files]').files;
   const formData = new FormData();
-  ['ticket_date','priority','complaint_category_id','location_id','ticket_description','details','assigned_to'].forEach(k => {
-    if (fd.get(k)) formData.append(k, fd.get(k));
+  NEW_TICKET_REQUIRED.forEach(({ name }) => {
+    formData.append(name, fd.get(name));
   });
+  if (fd.get('details')) formData.append('details', fd.get('details'));
   for (const f of imageFiles) formData.append('images', f);
   for (const f of documentFiles) formData.append('files', f);
   try {
     await postForm('/tickets/', formData);
     navigate('#/tickets');
   } catch (err) {
-    document.getElementById('formError').textContent = err.message;
+    errEl.textContent = err.message;
   }
 };
 
@@ -1166,8 +1339,10 @@ async function renderTicketDetail(id) {
 
     const isClosed = ticket.status === 'closed';
     const canEdit = canModifyTicket(ticket);
+    const canDelete = canDeleteTicket(ticket);
     const user = getAuthUser();
     const isAssignee = user && Number(ticket.assigned_to) === Number(user.emp_id);
+    const isCreator = user && Number(ticket.raising_employee_id) === Number(user.emp_id);
 
     main.innerHTML = `
       <div class="header-row">
@@ -1195,10 +1370,16 @@ async function renderTicketDetail(id) {
       </div>
       ${canEdit ? `
       <div class="card">
-        <h3 style="margin-bottom:12px;font-size:16px">Ticket Actions${isAssignee ? ' <span class="badge badge-in_progress">Assigned to you</span>' : ''}</h3>
+        <h3 style="margin-bottom:12px;font-size:16px">Ticket Actions${isAssignee ? ' <span class="badge badge-in_progress">Assigned to you</span>' : ''}${isCreator ? ' <span class="badge badge-open">Created by you</span>' : ''}</h3>
         <button class="btn btn-primary" onclick="openModal('update',${id})">Update Ticket</button>
         <button class="btn btn-warning" onclick="openModal('forward',${id})">Reassign Ticket</button>
         <button class="btn btn-success" onclick="openModal('close',${id})">Close Ticket</button>
+      </div>` : ''}
+      ${canDelete ? `
+      <div class="card">
+        <h3 style="margin-bottom:12px;font-size:16px">Delete Ticket</h3>
+        <p style="margin-bottom:10px;color:#666;font-size:13px">Permanently remove this ticket. Only available while the ticket is not closed.</p>
+        <button class="btn btn-danger" onclick="deleteTicket(${id})">Delete Ticket</button>
       </div>` : ''}
       ${!isClosed ? `
       <div class="card">
@@ -1350,6 +1531,17 @@ window.submitTicketComment = async (ticketId) => {
     document.getElementById('ticketMsg').innerHTML = '<div class="success">Comment added successfully</div>';
   } catch (err) {
     errEl.textContent = err.message;
+  }
+};
+
+window.deleteTicket = async (ticketId) => {
+  if (!confirm('Delete this ticket permanently? This cannot be undone.')) return;
+  try {
+    await request(`/tickets/${ticketId}`, { method: 'DELETE' });
+    setFlash('Ticket deleted successfully', 'success');
+    navigate('#/tickets');
+  } catch (err) {
+    document.getElementById('ticketMsg').innerHTML = `<div class="error">${esc(err.message)}</div>`;
   }
 };
 

@@ -7,7 +7,7 @@ export default function Departments() {
     <MasterPage
       title="Department Master"
       fields={[
-        { key: 'description', label: 'Description', idKey: 'dept_id' },
+        { key: 'description', label: 'Department', idKey: 'dept_id', required: true },
       ]}
       api={{
         list: api.getDepartments,
@@ -24,7 +24,7 @@ export function Roles() {
     <MasterPage
       title="Role Master"
       fields={[
-        { key: 'role_name', label: 'Role Name', idKey: 'role_id' },
+        { key: 'role_name', label: 'Role Name', idKey: 'role_id', required: true },
       ]}
       api={{
         list: api.getRoles,
@@ -53,16 +53,16 @@ export function Employees() {
     <MasterPage
       title="Employee Master"
       fields={[
-        { key: 'name', label: 'Name', idKey: 'emp_id' },
-        { key: 'user_id', label: 'User ID', idKey: 'emp_id' },
-        { key: 'password', label: 'Password', type: 'password', idKey: 'emp_id' },
+        { key: 'name', label: 'Name', idKey: 'emp_id', required: true },
+        { key: 'user_id', label: 'User ID', idKey: 'emp_id', required: true },
+        { key: 'password', label: 'Password', type: 'password', idKey: 'emp_id', required: true },
         {
-          key: 'dept_id', label: 'Department', type: 'select', idKey: 'emp_id',
+          key: 'dept_id', label: 'Department', type: 'select', idKey: 'emp_id', required: true,
           displayKey: 'department_name',
           options: departments.map(d => ({ value: d.dept_id, label: d.description })),
         },
         {
-          key: 'role_id', label: 'Role', type: 'select', idKey: 'emp_id',
+          key: 'role_id', label: 'Role', type: 'select', idKey: 'emp_id', required: true,
           displayKey: 'role_name',
           options: roles.map(r => ({ value: r.role_id, label: r.role_name })),
         },
@@ -82,7 +82,7 @@ export function Categories() {
     <MasterPage
       title="Complaint Category Master"
       fields={[
-        { key: 'category_description', label: 'Category Description', idKey: 'id' },
+        { key: 'category_description', label: 'Category Name', idKey: 'id', required: true },
       ]}
       api={{
         list: api.getCategories,
@@ -99,7 +99,7 @@ export function Locations() {
     <MasterPage
       title="Location Master"
       fields={[
-        { key: 'location_name', label: 'Location Name', idKey: 'id' },
+        { key: 'location_name', label: 'Location Name', idKey: 'id', required: true },
       ]}
       api={{
         list: api.getLocations,

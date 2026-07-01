@@ -32,6 +32,14 @@ export default function MasterPage({ title, fields, api }) {
     e.preventDefault();
     setError('');
     setMessage('');
+    for (const f of fields) {
+      const isRequired = f.required && !(f.type === 'password' && editId);
+      const value = form[f.key];
+      if (isRequired && (value === undefined || value === null || value === '' || !String(value).trim())) {
+        setError(`${f.label} is required`);
+        return;
+      }
+    }
     try {
       const payload = {};
       fields.forEach(f => {
@@ -40,7 +48,7 @@ export default function MasterPage({ title, fields, api }) {
         } else if (f.type === 'password' && editId && !form[f.key]) {
           // skip empty password on update
         } else {
-          payload[f.key] = form[f.key];
+          payload[f.key] = typeof form[f.key] === 'string' ? form[f.key].trim() : form[f.key];
         }
       });
       if (editId) {
@@ -93,9 +101,12 @@ export default function MasterPage({ title, fields, api }) {
           <div className="form-row">
             {fields.map(f => (
               <div className="form-group" key={f.key}>
-                <label>{f.label}</label>
+                <label>
+                  {f.label}
+                  {f.required ? <span className="req-star"> *</span> : null}
+                </label>
                 {f.type === 'select' ? (
-                  <select value={form[f.key] || ''} onChange={e => handleChange(f.key, e.target.value)} required>
+                  <select value={form[f.key] || ''} onChange={e => handleChange(f.key, e.target.value)} required={!!f.required}>
                     <option value="">-- Select --</option>
                     {f.options.map(o => (
                       <option key={o.value} value={o.value}>{o.label}</option>
@@ -106,7 +117,7 @@ export default function MasterPage({ title, fields, api }) {
                     type={f.type || 'text'}
                     value={form[f.key] || ''}
                     onChange={e => handleChange(f.key, e.target.value)}
-                    required={f.type === 'password' && editId ? false : true}
+                    required={!!f.required && !(f.type === 'password' && editId)}
                     placeholder={f.type === 'password' && editId ? 'Leave blank to keep current' : ''}
                   />
                 )}

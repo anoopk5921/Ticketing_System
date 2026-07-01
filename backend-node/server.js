@@ -137,6 +137,7 @@ async function initDb() {
       start_date DATE NULL,
       end_date DATE NULL,
       next_run_date DATE NOT NULL,
+      run_time TIME NOT NULL DEFAULT '09:00:00',
       last_run_date DATE NULL,
       complaint_category_id INT NOT NULL,
       location_id INT NOT NULL,
@@ -193,6 +194,15 @@ async function initDb() {
   if (scheduleViewCol[0].cnt === 0) {
     await pool.query('ALTER TABLE role_permissions ADD COLUMN can_view_schedules TINYINT(1) NOT NULL DEFAULT 1');
     await pool.query('ALTER TABLE role_permissions ADD COLUMN can_manage_schedules TINYINT(1) NOT NULL DEFAULT 1');
+  }
+
+  const [runTimeCol] = await pool.query(
+    `SELECT COUNT(*) AS cnt FROM information_schema.COLUMNS
+     WHERE TABLE_SCHEMA = ? AND TABLE_NAME = 'scheduled_jobs' AND COLUMN_NAME = 'run_time'`,
+    [dbConfig.database]
+  );
+  if (runTimeCol[0].cnt === 0) {
+    await pool.query("ALTER TABLE scheduled_jobs ADD COLUMN run_time TIME NOT NULL DEFAULT '09:00:00' AFTER next_run_date");
   }
 
   const [empCount] = await pool.query('SELECT COUNT(*) AS cnt FROM employees');
@@ -388,11 +398,25 @@ function isAssignee(user, ticket) {
   return Number(ticket.assigned_to) === Number(user.emp_id);
 }
 
+function isCreator(user, ticket) {
+  return Number(ticket.raising_employee_id) === Number(user.emp_id);
+}
+
 function canModifyTicket(user, ticket) {
   if (!canAccessTicket(user, ticket)) return false;
+  if (ticket.status === 'closed') return false;
   if (isAdminUser(user)) return true;
   if (isAssignee(user, ticket)) return true;
+  if (isCreator(user, ticket)) return true;
   if (hasPerm(user, 'can_edit')) return true;
+  return false;
+}
+
+function canDeleteTicket(user, ticket) {
+  if (!canAccessTicket(user, ticket)) return false;
+  if (ticket.status === 'closed') return false;
+  if (isAdminUser(user)) return true;
+  if (isCreator(user, ticket)) return true;
   return false;
 }
 
@@ -645,14 +669,18 @@ app.get('/api/departments/', async (req, res) => {
 
 app.post('/api/departments/', express.json(), async (req, res) => {
   if (!requirePerm(req.user, 'can_manage_masters', res)) return;
-  const [r] = await pool.query('INSERT INTO departments (description) VALUES (?)', [req.body.description]);
+  const description = String(req.body.description || '').trim();
+  if (!description) return res.status(400).json({ detail: 'Department is required' });
+  const [r] = await pool.query('INSERT INTO departments (description) VALUES (?)', [description]);
   const [rows] = await pool.query('SELECT * FROM departments WHERE dept_id = ?', [r.insertId]);
   res.json(rows[0]);
 });
 
 app.put('/api/departments/:id', express.json(), async (req, res) => {
   if (!requirePerm(req.user, 'can_manage_masters', res)) return;
-  await pool.query('UPDATE departments SET description = ? WHERE dept_id = ?', [req.body.description, req.params.id]);
+  const description = String(req.body.description || '').trim();
+  if (!description) return res.status(400).json({ detail: 'Department is required' });
+  await pool.query('UPDATE departments SET description = ? WHERE dept_id = ?', [description, req.params.id]);
   const [rows] = await pool.query('SELECT * FROM departments WHERE dept_id = ?', [req.params.id]);
   if (!rows.length) return res.status(404).json({ detail: 'Department not found' });
   res.json(rows[0]);
@@ -673,14 +701,16 @@ app.get('/api/roles/', async (req, res) => {
 
 app.post('/api/roles/', express.json(), async (req, res) => {
   if (!requireAdminUser(req.user, res)) return;
-  if (isAdminRole(req.body.role_name)) {
+  const roleName = String(req.body.role_name || '').trim();
+  if (!roleName) return res.status(400).json({ detail: 'Role Name is required' });
+  if (isAdminRole(roleName)) {
     const [existing] = await pool.query("SELECT role_id FROM roles WHERE LOWER(role_name) = 'admin'");
     if (existing.length) {
       return res.status(400).json({ detail: 'Only one Admin role is allowed' });
     }
   }
-  const [r] = await pool.query('INSERT INTO roles (role_name) VALUES (?)', [req.body.role_name]);
-  await ensureRolePermissions(r.insertId, req.body.role_name);
+  const [r] = await pool.query('INSERT INTO roles (role_name) VALUES (?)', [roleName]);
+  await ensureRolePermissions(r.insertId, roleName);
   const [rows] = await pool.query('SELECT * FROM roles WHERE role_id = ?', [r.insertId]);
   res.json(rows[0]);
 });
@@ -689,10 +719,12 @@ app.put('/api/roles/:id', express.json(), async (req, res) => {
   if (!requireAdminUser(req.user, res)) return;
   const [current] = await pool.query('SELECT role_name FROM roles WHERE role_id = ?', [req.params.id]);
   if (!current.length) return res.status(404).json({ detail: 'Role not found' });
-  if (isAdminRole(current[0].role_name) && !isAdminRole(req.body.role_name)) {
+  const roleName = String(req.body.role_name || '').trim();
+  if (!roleName) return res.status(400).json({ detail: 'Role Name is required' });
+  if (isAdminRole(current[0].role_name) && !isAdminRole(roleName)) {
     return res.status(400).json({ detail: 'The Admin role cannot be renamed' });
   }
-  if (isAdminRole(req.body.role_name) && !isAdminRole(current[0].role_name)) {
+  if (isAdminRole(roleName) && !isAdminRole(current[0].role_name)) {
     const [existing] = await pool.query(
       "SELECT role_id FROM roles WHERE LOWER(role_name) = 'admin' AND role_id != ?",
       [req.params.id]
@@ -701,7 +733,7 @@ app.put('/api/roles/:id', express.json(), async (req, res) => {
       return res.status(400).json({ detail: 'Only one Admin role is allowed' });
     }
   }
-  await pool.query('UPDATE roles SET role_name = ? WHERE role_id = ?', [req.body.role_name, req.params.id]);
+  await pool.query('UPDATE roles SET role_name = ? WHERE role_id = ?', [roleName, req.params.id]);
   const [rows] = await pool.query('SELECT * FROM roles WHERE role_id = ?', [req.params.id]);
   if (!rows.length) return res.status(404).json({ detail: 'Role not found' });
   res.json(rows[0]);
@@ -732,10 +764,16 @@ app.get('/api/employees/', async (req, res) => {
 
 app.post('/api/employees/', express.json(), async (req, res) => {
   if (!requirePerm(req.user, 'can_manage_masters', res)) return;
-  const { name, user_id, password, dept_id, role_id } = req.body;
-  if (!user_id || !password) {
-    return res.status(400).json({ detail: 'User ID and Password are required' });
-  }
+  const name = String(req.body.name || '').trim();
+  const user_id = String(req.body.user_id || '').trim();
+  const password = String(req.body.password || '').trim();
+  const dept_id = Number(req.body.dept_id);
+  const role_id = Number(req.body.role_id);
+  if (!name) return res.status(400).json({ detail: 'Name is required' });
+  if (!user_id) return res.status(400).json({ detail: 'User ID is required' });
+  if (!password) return res.status(400).json({ detail: 'Password is required' });
+  if (!dept_id) return res.status(400).json({ detail: 'Department is required' });
+  if (!role_id) return res.status(400).json({ detail: 'Role is required' });
   const [r] = await pool.query(
     'INSERT INTO employees (name, user_id, password, dept_id, role_id) VALUES (?, ?, ?, ?, ?)',
     [name, user_id, password, dept_id, role_id]
@@ -748,7 +786,15 @@ app.post('/api/employees/', express.json(), async (req, res) => {
 
 app.put('/api/employees/:id', express.json(), async (req, res) => {
   if (!requirePerm(req.user, 'can_manage_masters', res)) return;
-  const { name, user_id, password, dept_id, role_id } = req.body;
+  const name = String(req.body.name || '').trim();
+  const user_id = String(req.body.user_id || '').trim();
+  const password = String(req.body.password || '').trim();
+  const dept_id = Number(req.body.dept_id);
+  const role_id = Number(req.body.role_id);
+  if (!name) return res.status(400).json({ detail: 'Name is required' });
+  if (!user_id) return res.status(400).json({ detail: 'User ID is required' });
+  if (!dept_id) return res.status(400).json({ detail: 'Department is required' });
+  if (!role_id) return res.status(400).json({ detail: 'Role is required' });
   if (password) {
     await pool.query(
       'UPDATE employees SET name=?, user_id=?, password=?, dept_id=?, role_id=? WHERE emp_id=?',
@@ -781,14 +827,18 @@ app.get('/api/categories/', async (req, res) => {
 
 app.post('/api/categories/', express.json(), async (req, res) => {
   if (!requirePerm(req.user, 'can_manage_masters', res)) return;
-  const [r] = await pool.query('INSERT INTO complaint_categories (category_description) VALUES (?)', [req.body.category_description]);
+  const categoryDescription = String(req.body.category_description || '').trim();
+  if (!categoryDescription) return res.status(400).json({ detail: 'Category Name is required' });
+  const [r] = await pool.query('INSERT INTO complaint_categories (category_description) VALUES (?)', [categoryDescription]);
   const [rows] = await pool.query('SELECT * FROM complaint_categories WHERE id = ?', [r.insertId]);
   res.json(rows[0]);
 });
 
 app.put('/api/categories/:id', express.json(), async (req, res) => {
   if (!requirePerm(req.user, 'can_manage_masters', res)) return;
-  await pool.query('UPDATE complaint_categories SET category_description = ? WHERE id = ?', [req.body.category_description, req.params.id]);
+  const categoryDescription = String(req.body.category_description || '').trim();
+  if (!categoryDescription) return res.status(400).json({ detail: 'Category Name is required' });
+  await pool.query('UPDATE complaint_categories SET category_description = ? WHERE id = ?', [categoryDescription, req.params.id]);
   const [rows] = await pool.query('SELECT * FROM complaint_categories WHERE id = ?', [req.params.id]);
   if (!rows.length) return res.status(404).json({ detail: 'Category not found' });
   res.json(rows[0]);
@@ -808,14 +858,18 @@ app.get('/api/locations/', async (req, res) => {
 
 app.post('/api/locations/', express.json(), async (req, res) => {
   if (!requirePerm(req.user, 'can_manage_masters', res)) return;
-  const [r] = await pool.query('INSERT INTO locations (location_name) VALUES (?)', [req.body.location_name]);
+  const locationName = String(req.body.location_name || '').trim();
+  if (!locationName) return res.status(400).json({ detail: 'Location Name is required' });
+  const [r] = await pool.query('INSERT INTO locations (location_name) VALUES (?)', [locationName]);
   const [rows] = await pool.query('SELECT * FROM locations WHERE id = ?', [r.insertId]);
   res.json(rows[0]);
 });
 
 app.put('/api/locations/:id', express.json(), async (req, res) => {
   if (!requirePerm(req.user, 'can_manage_masters', res)) return;
-  await pool.query('UPDATE locations SET location_name = ? WHERE id = ?', [req.body.location_name, req.params.id]);
+  const locationName = String(req.body.location_name || '').trim();
+  if (!locationName) return res.status(400).json({ detail: 'Location Name is required' });
+  await pool.query('UPDATE locations SET location_name = ? WHERE id = ?', [locationName, req.params.id]);
   const [rows] = await pool.query('SELECT * FROM locations WHERE id = ?', [req.params.id]);
   if (!rows.length) return res.status(404).json({ detail: 'Location not found' });
   res.json(rows[0]);
@@ -1020,6 +1074,94 @@ function addDays(dateStr, days) {
   return toDateStr(d);
 }
 
+function parseRunTimeInput(value) {
+  const s = String(value || '').trim();
+  const match = s.match(/^(\d{1,2}):(\d{2})\s*(AM|PM)$/i);
+  if (!match) throw new Error('Invalid time format. Use hh:mm AM/PM');
+  let hour = parseInt(match[1], 10);
+  const minute = match[2];
+  const ampm = match[3].toUpperCase();
+  if (hour < 1 || hour > 12) throw new Error('Hour must be between 1 and 12');
+  if (ampm === 'PM' && hour < 12) hour += 12;
+  if (ampm === 'AM' && hour === 12) hour = 0;
+  return `${String(hour).padStart(2, '0')}:${minute}:00`;
+}
+
+function formatRunTimeDisplay(timeValue) {
+  if (!timeValue) return '9:00 AM';
+  const parts = String(timeValue).split(':');
+  let h = parseInt(parts[0], 10);
+  const m = parts[1] || '00';
+  const ampm = h >= 12 ? 'PM' : 'AM';
+  h = h % 12;
+  if (h === 0) h = 12;
+  return `${h}:${m} ${ampm}`;
+}
+
+function validateScheduleJobBody(b, res) {
+  const scheduleType = b.schedule_type;
+  const validTypes = ['once', 'daily', 'weekly', 'monthly', 'periodic'];
+  if (!String(b.job_name || '').trim()) {
+    res.status(400).json({ detail: 'Job name is required' });
+    return null;
+  }
+  if (!validTypes.includes(scheduleType)) {
+    res.status(400).json({ detail: 'Invalid schedule type' });
+    return null;
+  }
+  if (!b.complaint_category_id || !b.location_id || !b.ticket_description || !b.assigned_to) {
+    res.status(400).json({ detail: 'Category, location, description, and assignee are required' });
+    return null;
+  }
+  if (!b.end_date) {
+    res.status(400).json({ detail: 'End date is required' });
+    return null;
+  }
+  if (!b.run_time) {
+    res.status(400).json({ detail: 'Ticket creation time is required (hh:mm AM/PM)' });
+    return null;
+  }
+  let runTime;
+  try {
+    runTime = parseRunTimeInput(b.run_time);
+  } catch (err) {
+    res.status(400).json({ detail: err.message });
+    return null;
+  }
+  if (scheduleType === 'once' && !b.run_date) {
+    res.status(400).json({ detail: 'Run date is required for one-time jobs' });
+    return null;
+  }
+  if (scheduleType === 'weekly' && b.day_of_week == null) {
+    res.status(400).json({ detail: 'Day of week is required for weekly jobs' });
+    return null;
+  }
+  if (scheduleType === 'monthly' && !b.day_of_month) {
+    res.status(400).json({ detail: 'Day of month is required for monthly jobs' });
+    return null;
+  }
+  if (scheduleType === 'periodic') {
+    if (!b.interval_days || Number(b.interval_days) < 1) {
+      res.status(400).json({ detail: 'Interval days must be at least 1 for periodic jobs' });
+      return null;
+    }
+    if (!b.start_date) {
+      res.status(400).json({ detail: 'Start date is required for periodic jobs' });
+      return null;
+    }
+  }
+  if (scheduleType === 'daily' && !b.start_date) {
+    res.status(400).json({ detail: 'Start date is required for daily jobs' });
+    return null;
+  }
+  const startRef = b.run_date || b.start_date;
+  if (startRef && b.end_date <= startRef) {
+    res.status(400).json({ detail: 'End date must be after the start/run date' });
+    return null;
+  }
+  return { runTime };
+}
+
 function canViewSchedules(user) {
   return !!(user && user.emp_id);
 }
@@ -1060,6 +1202,7 @@ function formatScheduledJob(job) {
   if (job.created_at?.toISOString) job.created_at = job.created_at.toISOString();
   if (job.updated_at?.toISOString) job.updated_at = job.updated_at.toISOString();
   job.is_active = !!job.is_active;
+  job.run_time_display = formatRunTimeDisplay(job.run_time);
   return job;
 }
 
@@ -1147,11 +1290,13 @@ async function createTicketFromJob(job) {
 async function processScheduledJobs() {
   const today = toDateStr(new Date());
   const [jobs] = await pool.query(
-    'SELECT * FROM scheduled_jobs WHERE is_active = 1 AND next_run_date <= ?',
-    [today]
+    `SELECT * FROM scheduled_jobs
+     WHERE is_active = 1
+       AND TIMESTAMP(next_run_date, COALESCE(run_time, '09:00:00')) <= NOW()
+       AND (end_date IS NULL OR CURDATE() <= end_date)`
   );
   for (const job of jobs) {
-    if (job.schedule_type === 'periodic' && job.end_date && today > toDateStr(job.end_date)) {
+    if (job.end_date && today > toDateStr(job.end_date)) {
       await pool.query('UPDATE scheduled_jobs SET is_active = 0 WHERE id = ?', [job.id]);
       continue;
     }
@@ -1159,7 +1304,7 @@ async function processScheduledJobs() {
       await createTicketFromJob(job);
       const ranOn = toDateStr(job.next_run_date);
       const nextRun = computeNextRunAfter(job, ranOn);
-      if (!nextRun || job.schedule_type === 'once') {
+      if (!nextRun || job.schedule_type === 'once' || (job.end_date && nextRun > toDateStr(job.end_date))) {
         await pool.query(
           'UPDATE scheduled_jobs SET last_run_date = ?, is_active = 0 WHERE id = ?',
           [ranOn, job.id]
@@ -1267,7 +1412,6 @@ app.get('/api/dashboard/', async (req, res) => {
       summary: summarizeByStatus(myTickets),
       assigned_to_me: await enrichTicketsWithCompletion(assignedToMe),
       created_by_me: await enrichTicketsWithCompletion(createdByMe),
-      completed: await enrichTicketsWithCompletion(myTickets.filter((t) => t.status === 'closed')),
     },
   };
 
@@ -1280,7 +1424,6 @@ app.get('/api/dashboard/', async (req, res) => {
     payload.all_work = {
       summary: summarizeByStatus(allTickets),
       recent: await enrichTicketsWithCompletion(allTickets.slice(0, 20)),
-      completed: await enrichTicketsWithCompletion(allTickets.filter((t) => t.status === 'closed').slice(0, 20)),
     };
   }
 
@@ -1300,7 +1443,6 @@ app.get('/api/dashboard/', async (req, res) => {
       tickets: await enrichTicketsWithCompletion(deptTickets),
       assigned_to_me: await enrichTicketsWithCompletion(deptAssigned),
       created_by_me: await enrichTicketsWithCompletion(deptCreated),
-      completed: await enrichTicketsWithCompletion(deptTickets.filter((t) => t.status === 'closed')),
     };
   }
 
@@ -1361,10 +1503,17 @@ app.post('/api/tickets/', upload.any(), async (req, res) => {
       'ticket_date', 'complaint_category_id', 'location_id',
       'ticket_description', 'assigned_to', 'priority',
     ];
-    const missing = required.filter((k) => b[k] === undefined || b[k] === '');
+    const missing = required.filter((k) => {
+      const val = b[k];
+      if (val === undefined || val === null || val === '') return true;
+      if (k === 'ticket_description' && !String(val).trim()) return true;
+      return false;
+    });
     if (missing.length) {
       return res.status(400).json({ detail: `Missing required fields: ${missing.join(', ')}` });
     }
+
+    const ticketDescription = String(b.ticket_description).trim();
 
     const raisingEmployeeId = req.user.emp_id;
     const raisingDeptId = req.user.dept_id;
@@ -1386,7 +1535,7 @@ app.post('/api/tickets/', upload.any(), async (req, res) => {
         complaint_category_id, location_id, ticket_description, details, assigned_to, priority, status)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open')`,
       [ticketNo, b.ticket_date, raisingDeptId, raisingEmployeeId,
-        b.complaint_category_id, b.location_id, b.ticket_description, b.details || null, b.assigned_to, priority]
+        b.complaint_category_id, b.location_id, ticketDescription, b.details || null, b.assigned_to, priority]
     );
     const ticketId = r.insertId;
 
@@ -1533,6 +1682,32 @@ app.post('/api/tickets/:id/close', upload.array('images'), async (req, res) => {
   res.json(await getTicketDetail(req.params.id));
 });
 
+app.delete('/api/tickets/:id', async (req, res) => {
+  try {
+    const [rows] = await pool.query('SELECT * FROM tickets WHERE id = ?', [req.params.id]);
+    if (!rows.length) return res.status(404).json({ detail: 'Ticket not found' });
+    if (!canDeleteTicket(req.user, rows[0])) {
+      return res.status(403).json({ detail: 'You do not have permission to delete this ticket' });
+    }
+
+    const [attachments] = await pool.query(
+      'SELECT id, file_path FROM ticket_attachments WHERE ticket_id = ?',
+      [req.params.id]
+    );
+    for (const att of attachments) {
+      const filePath = path.join(__dirname, '..', att.file_path);
+      if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
+    }
+    await pool.query('DELETE FROM ticket_attachments WHERE ticket_id = ?', [req.params.id]);
+    await pool.query('DELETE FROM ticket_history WHERE ticket_id = ?', [req.params.id]);
+    await pool.query('DELETE FROM tickets WHERE id = ?', [req.params.id]);
+    res.json({ ok: true, message: 'Ticket deleted' });
+  } catch (err) {
+    console.error('DELETE /api/tickets/:id failed:', err);
+    res.status(500).json({ detail: err.message || 'Failed to delete ticket' });
+  }
+});
+
 // --- Scheduled Jobs ---
 app.get('/api/scheduled-jobs/', async (req, res) => {
   if (!(await canAccessSchedulesApi(req.user))) {
@@ -1564,32 +1739,11 @@ app.post('/api/scheduled-jobs/', async (req, res) => {
     return res.status(403).json({ detail: 'You do not have permission to create scheduled jobs' });
   }
   const b = req.body || {};
+  const validated = validateScheduleJobBody(b, res);
+  if (!validated) return;
+
   const jobName = String(b.job_name || '').trim();
   const scheduleType = b.schedule_type;
-  const validTypes = ['once', 'daily', 'weekly', 'monthly', 'periodic'];
-  if (!jobName) return res.status(400).json({ detail: 'Job name is required' });
-  if (!validTypes.includes(scheduleType)) {
-    return res.status(400).json({ detail: 'Invalid schedule type' });
-  }
-  if (!b.complaint_category_id || !b.location_id || !b.ticket_description || !b.assigned_to) {
-    return res.status(400).json({ detail: 'Category, location, description, and assignee are required' });
-  }
-  if (scheduleType === 'once' && !b.run_date) {
-    return res.status(400).json({ detail: 'Run date is required for one-time jobs' });
-  }
-  if (scheduleType === 'weekly' && b.day_of_week == null) {
-    return res.status(400).json({ detail: 'Day of week is required for weekly jobs' });
-  }
-  if (scheduleType === 'monthly' && !b.day_of_month) {
-    return res.status(400).json({ detail: 'Day of month is required for monthly jobs' });
-  }
-  if (scheduleType === 'periodic') {
-    if (!b.interval_days || Number(b.interval_days) < 1) {
-      return res.status(400).json({ detail: 'Interval days must be at least 1 for periodic jobs' });
-    }
-    if (!b.start_date) return res.status(400).json({ detail: 'Start date is required for periodic jobs' });
-  }
-
   const nextRun = computeInitialNextRun(b);
   const raisingDeptId = req.user.dept_id;
   const raisingEmployeeId = req.user.emp_id;
@@ -1597,9 +1751,9 @@ app.post('/api/scheduled-jobs/', async (req, res) => {
   const [r] = await pool.query(
     `INSERT INTO scheduled_jobs
       (job_name, schedule_type, run_date, day_of_week, day_of_month, interval_days,
-       start_date, end_date, next_run_date, complaint_category_id, location_id,
+       start_date, end_date, next_run_date, run_time, complaint_category_id, location_id,
        ticket_description, details, assigned_to, priority, raising_dept_id, raising_employee_id)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       jobName, scheduleType,
       b.run_date || null,
@@ -1609,6 +1763,7 @@ app.post('/api/scheduled-jobs/', async (req, res) => {
       b.start_date || null,
       b.end_date || null,
       nextRun,
+      validated.runTime,
       b.complaint_category_id,
       b.location_id,
       String(b.ticket_description).trim(),
@@ -1636,15 +1791,33 @@ app.put('/api/scheduled-jobs/:id', async (req, res) => {
   }
 
   const b = req.body || {};
-  const jobName = String(b.job_name || existing[0].job_name).trim();
-  const scheduleType = b.schedule_type || existing[0].schedule_type;
-  const merged = {
-    schedule_type: scheduleType,
+  const mergedBody = {
+    job_name: b.job_name || existing[0].job_name,
+    schedule_type: b.schedule_type || existing[0].schedule_type,
     run_date: b.run_date !== undefined ? b.run_date : toDateStr(existing[0].run_date),
     start_date: b.start_date !== undefined ? b.start_date : toDateStr(existing[0].start_date),
+    end_date: b.end_date !== undefined ? b.end_date : toDateStr(existing[0].end_date),
     day_of_week: b.day_of_week !== undefined ? b.day_of_week : existing[0].day_of_week,
     day_of_month: b.day_of_month !== undefined ? b.day_of_month : existing[0].day_of_month,
     interval_days: b.interval_days !== undefined ? b.interval_days : existing[0].interval_days,
+    complaint_category_id: b.complaint_category_id || existing[0].complaint_category_id,
+    location_id: b.location_id || existing[0].location_id,
+    ticket_description: b.ticket_description || existing[0].ticket_description,
+    assigned_to: b.assigned_to || existing[0].assigned_to,
+    run_time: b.run_time || formatRunTimeDisplay(existing[0].run_time),
+  };
+  const validated = validateScheduleJobBody(mergedBody, res);
+  if (!validated) return;
+
+  const jobName = String(mergedBody.job_name || existing[0].job_name).trim();
+  const scheduleType = mergedBody.schedule_type || existing[0].schedule_type;
+  const merged = {
+    schedule_type: scheduleType,
+    run_date: mergedBody.run_date,
+    start_date: mergedBody.start_date,
+    day_of_week: mergedBody.day_of_week,
+    day_of_month: mergedBody.day_of_month,
+    interval_days: mergedBody.interval_days,
   };
   const nextRun = b.next_run_date || computeInitialNextRun(merged);
   const isActive = b.is_active !== undefined ? (b.is_active ? 1 : 0) : existing[0].is_active;
@@ -1652,7 +1825,7 @@ app.put('/api/scheduled-jobs/:id', async (req, res) => {
   await pool.query(
     `UPDATE scheduled_jobs SET
       job_name = ?, schedule_type = ?, run_date = ?, day_of_week = ?, day_of_month = ?,
-      interval_days = ?, start_date = ?, end_date = ?, next_run_date = ?,
+      interval_days = ?, start_date = ?, end_date = ?, next_run_date = ?, run_time = ?,
       complaint_category_id = ?, location_id = ?, ticket_description = ?, details = ?,
       assigned_to = ?, priority = ?, is_active = ?
      WHERE id = ?`,
@@ -1662,14 +1835,15 @@ app.put('/api/scheduled-jobs/:id', async (req, res) => {
       merged.day_of_week != null ? Number(merged.day_of_week) : null,
       merged.day_of_month ? Number(merged.day_of_month) : null,
       merged.interval_days ? Number(merged.interval_days) : null,
-      b.start_date !== undefined ? b.start_date : toDateStr(existing[0].start_date),
-      b.end_date !== undefined ? b.end_date : toDateStr(existing[0].end_date),
+      merged.start_date || null,
+      mergedBody.end_date || null,
       nextRun,
-      b.complaint_category_id || existing[0].complaint_category_id,
-      b.location_id || existing[0].location_id,
+      validated.runTime,
+      mergedBody.complaint_category_id || existing[0].complaint_category_id,
+      mergedBody.location_id || existing[0].location_id,
       String(b.ticket_description || existing[0].ticket_description).trim(),
       b.details !== undefined ? b.details : existing[0].details,
-      b.assigned_to || existing[0].assigned_to,
+      mergedBody.assigned_to || existing[0].assigned_to,
       b.priority || existing[0].priority,
       isActive,
       req.params.id,
@@ -1712,7 +1886,7 @@ initDb()
     await processScheduledJobs();
     setInterval(() => {
       processScheduledJobs().catch((err) => console.error('Scheduled job runner failed:', err.message));
-    }, 60 * 60 * 1000);
+    }, 60 * 1000);
     app.listen(PORT, () => {
       console.log(`API running:  http://localhost:${PORT}`);
       console.log(`App UI:       http://localhost:${PORT}`);

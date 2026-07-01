@@ -1,12 +1,12 @@
 from datetime import date, datetime
 from typing import Optional, List
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 
 # --- Department ---
 class DepartmentBase(BaseModel):
-    description: str
+    description: str = Field(min_length=1)
 
 
 class DepartmentCreate(DepartmentBase):
@@ -20,7 +20,7 @@ class DepartmentOut(DepartmentBase):
 
 # --- Role ---
 class RoleBase(BaseModel):
-    role_name: str
+    role_name: str = Field(min_length=1)
 
 
 class RoleCreate(RoleBase):
@@ -34,14 +34,14 @@ class RoleOut(RoleBase):
 
 # --- Employee ---
 class EmployeeBase(BaseModel):
-    name: str
-    user_id: str
+    name: str = Field(min_length=1)
+    user_id: str = Field(min_length=1)
     dept_id: int
     role_id: int
 
 
 class EmployeeCreate(EmployeeBase):
-    password: str
+    password: str = Field(min_length=1)
 
 
 class EmployeeUpdate(EmployeeBase):
@@ -60,7 +60,7 @@ class EmployeeDetail(EmployeeOut):
 
 # --- Complaint Category ---
 class CategoryBase(BaseModel):
-    category_description: str
+    category_description: str = Field(min_length=1)
 
 
 class CategoryCreate(CategoryBase):
@@ -74,7 +74,7 @@ class CategoryOut(CategoryBase):
 
 # --- Location ---
 class LocationBase(BaseModel):
-    location_name: str
+    location_name: str = Field(min_length=1)
 
 
 class LocationCreate(LocationBase):

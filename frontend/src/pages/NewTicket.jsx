@@ -47,11 +47,26 @@ export default function NewTicket() {
   const handleSubmit = async (e) => {
     e.preventDefault();
     setError('');
+    const missing = [];
+    if (!form.ticket_date) missing.push('Date');
+    if (!form.priority) missing.push('Priority');
+    if (!form.complaint_category_id) missing.push('Complaint Category');
+    if (!form.location_id) missing.push('Location');
+    if (!form.ticket_description.trim()) missing.push('Ticket Description');
+    if (!form.assigned_to) missing.push('Assigned To');
+    if (missing.length) {
+      setError(`Please fill required fields: ${missing.join(', ')}`);
+      return;
+    }
     try {
       const fd = new FormData();
-      Object.entries(form).forEach(([key, val]) => {
-        if (val !== '') fd.append(key, val);
-      });
+      fd.append('ticket_date', form.ticket_date);
+      fd.append('priority', form.priority);
+      fd.append('complaint_category_id', form.complaint_category_id);
+      fd.append('location_id', form.location_id);
+      fd.append('ticket_description', form.ticket_description.trim());
+      fd.append('assigned_to', form.assigned_to);
+      if (form.details.trim()) fd.append('details', form.details.trim());
       images.forEach(img => fd.append('images', img));
       documents.forEach(doc => fd.append('files', doc));
 
@@ -67,15 +82,17 @@ export default function NewTicket() {
       <h2 className="page-title">Create New Ticket</h2>
 
       <div className="card">
-        <form onSubmit={handleSubmit}>
+        <form onSubmit={handleSubmit} noValidate>
+          <p className="form-hint">Fields marked with <span className="req-star">*</span> are mandatory.</p>
           <div className="form-row">
             <div className="form-group">
-              <label>Date</label>
+              <label>Date <span className="req-star">*</span></label>
               <input type="date" value={form.ticket_date} onChange={e => handleChange('ticket_date', e.target.value)} required />
             </div>
             <div className="form-group">
-              <label>Priority</label>
+              <label>Priority <span className="req-star">*</span></label>
               <select value={form.priority} onChange={e => handleChange('priority', e.target.value)} required>
+                <option value="">-- Select --</option>
                 {PRIORITIES.map(p => <option key={p.value} value={p.value}>{p.label}</option>)}
               </select>
             </div>
@@ -83,14 +100,14 @@ export default function NewTicket() {
 
           <div className="form-row">
             <div className="form-group">
-              <label>Complaint Category</label>
+              <label>Complaint Category <span className="req-star">*</span></label>
               <select value={form.complaint_category_id} onChange={e => handleChange('complaint_category_id', e.target.value)} required>
                 <option value="">-- Select --</option>
                 {categories.map(c => <option key={c.id} value={c.id}>{c.category_description}</option>)}
               </select>
             </div>
             <div className="form-group">
-              <label>Location</label>
+              <label>Location <span className="req-star">*</span></label>
               <select value={form.location_id} onChange={e => handleChange('location_id', e.target.value)} required>
                 <option value="">-- Select --</option>
                 {locations.map(l => <option key={l.id} value={l.id}>{l.location_name}</option>)}
@@ -100,11 +117,11 @@ export default function NewTicket() {
 
           <div className="form-row">
             <div className="form-group">
-              <label>Ticket Description</label>
-              <input value={form.ticket_description} onChange={e => handleChange('ticket_description', e.target.value)} required />
+              <label>Ticket Description <span className="req-star">*</span></label>
+              <input value={form.ticket_description} onChange={e => handleChange('ticket_description', e.target.value)} required maxLength={300} />
             </div>
             <div className="form-group">
-              <label>Assigned To</label>
+              <label>Assigned To <span className="req-star">*</span></label>
               <select value={form.assigned_to} onChange={e => handleChange('assigned_to', e.target.value)} required>
                 <option value="">-- Select --</option>
                 {employees.map(e => <option key={e.emp_id} value={e.emp_id}>{e.name}</option>)}

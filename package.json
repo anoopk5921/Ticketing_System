@@ -2,9 +2,11 @@
   "name": "ticketing-system",
   "private": true,
   "scripts": {
+    "setup": "powershell -ExecutionPolicy Bypass -File setup.ps1",
     "start": "node start.js",
     "ui": "node serve.js",
     "api": "node backend-node/server.js",
-    "dev": "node backend-node/server.js"
+    "dev": "node backend-node/server.js",
+    "test": "node backend-node/test-app.js && node backend-node/test-thorough.js"
   }
 }

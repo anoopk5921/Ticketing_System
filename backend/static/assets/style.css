@@ -3,8 +3,12 @@ body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background:
 .app { display: flex; min-height: 100vh; }
 .sidebar { width: 240px; background: #1a3a5c; color: #fff; padding: 20px 0; flex-shrink: 0; }
 .sidebar h1 { font-size: 16px; padding: 0 20px 20px; border-bottom: 1px solid rgba(255,255,255,0.15); margin-bottom: 10px; }
-.sidebar a { display: block; padding: 10px 20px; color: rgba(255,255,255,0.8); text-decoration: none; font-size: 14px; cursor: pointer; }
+.sidebar a { display: flex; align-items: center; gap: 10px; padding: 10px 20px; color: rgba(255,255,255,0.8); text-decoration: none; font-size: 14px; cursor: pointer; }
 .sidebar a:hover, .sidebar a.active { background: rgba(255,255,255,0.1); color: #fff; }
+.sidebar a.active .nav-icon { opacity: 1; }
+.nav-icon { display: inline-flex; align-items: center; justify-content: center; width: 18px; height: 18px; flex-shrink: 0; opacity: 0.85; }
+.nav-icon svg { width: 18px; height: 18px; stroke: currentColor; fill: none; stroke-width: 1.75; stroke-linecap: round; stroke-linejoin: round; }
+.nav-label { line-height: 1.2; }
 .sidebar .section-title { padding: 15px 20px 5px; font-size: 11px; text-transform: uppercase; color: rgba(255,255,255,0.4); letter-spacing: 1px; }
 .content-area { flex: 1; display: flex; flex-direction: column; min-width: 0; }
 .app-header { display: flex; align-items: center; justify-content: flex-end; padding: 12px 24px; background: #fff; border-bottom: 1px solid #e0e0e0; flex-shrink: 0; }
@@ -82,5 +86,14 @@ table tr:hover { background: #f8f9fa; }
 .dash-period-label { font-weight: 600; color: #1a3a5c; font-size: 16px; min-width: 160px; text-align: center; }
 .dash-period-hint { margin-top: 10px; color: #888; font-size: 13px; }
 .page-subtitle { color: #666; margin: -8px 0 16px; font-size: 14px; }
+.form-hint { color: #666; font-size: 13px; margin: 0 0 14px; }
+.req-star { color: #c62828; font-weight: 700; }
 .btn-danger { background: #c62828; color: #fff; border-color: #c62828; }
 .btn-danger:hover { background: #b71c1c; }
+.time-input-row { display: flex; align-items: center; gap: 8px; }
+.time-input-row select { min-width: 70px; }
+.field-hint { display: block; margin-top: 4px; color: #777; font-size: 12px; }
+.schedule-date-row { flex-wrap: wrap; gap: 16px; margin-bottom: 14px; }
+.schedule-date-row .form-group { flex: 1; min-width: 200px; }
+.schedule-time-field { flex: 1; min-width: 200px; max-width: 50%; }
+.schedule-day-field { flex: 1; min-width: 200px; max-width: 50%; }
